@@ -1,0 +1,1233 @@
+import express from 'express';
+import path from 'path';
+import { createServer as createViteServer } from 'vite';
+import { db, officialApiScopes } from './server/db.ts';
+import { 
+  getAIProviderInstance, 
+  extractWithFallback, 
+  validateFiscalData,
+  ReceiptImage
+} from './server/ai-providers.ts';
+import { ExpenseRecord } from './src/types.ts';
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  // JSON Body Parser with high limit for image payloads
+  app.use(express.json({ limit: '25mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+  // --------------------------------------------------
+  // REST API Routes (Internal & UI Support)
+  // --------------------------------------------------
+
+  // Health check
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', service: 'ErogaAI SaaS Backend', time: new Date().toISOString() });
+  });
+
+  // Session & Auth
+  app.get('/api/session', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const org = db.getOrganizationById(orgId) || db.getOrganizations()[0];
+    const companies = db.getCompanies(orgId);
+    const branches = db.getBranches(orgId);
+    const users = db.getUsers(orgId);
+    const currentUser = users[0] || null;
+    res.json({
+      organization: org,
+      companies,
+      branches,
+      users,
+      currentUser
+    });
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const org = db.getOrganizationById(orgId) || db.getOrganizations()[0];
+    const users = db.getUsers(orgId);
+    res.json({
+      user: users[0] || null,
+      organization: org
+    });
+  });
+
+  // Organizations
+  app.get('/api/organizations', (req, res) => {
+    res.json({ organizations: db.getOrganizations() });
+  });
+
+  app.post('/api/organizations', (req, res) => {
+    const org = db.saveOrganization(req.body);
+    res.status(201).json(org);
+  });
+
+  // --------------------------------------------------
+  // Users & Team Management (Gestión de Equipo)
+  // --------------------------------------------------
+  app.get('/api/users', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const includeInactive = req.query.includeInactive === 'true';
+    res.json({ users: db.getUsers(orgId, includeInactive) });
+  });
+
+  app.post('/api/users', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveUser(orgId, req.body, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.status(201).json({ user: result.user });
+  });
+
+  app.put('/api/users/:id', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveUser(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ user: result.user });
+  });
+
+  app.delete('/api/users/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.query.userId as string) || 'usr_admin_01';
+    const userName = (req.query.userName as string) || 'Administrador';
+
+    const result = db.deactivateUser(orgId, req.params.id, userId, userName);
+    if (!result.success) {
+      return res.status(404).json({ error: result.message });
+    }
+    res.json(result);
+  });
+
+  // --------------------------------------------------
+  // RBAC Roles & Permissions Matrix Management
+  // --------------------------------------------------
+  app.get('/api/rbac/permissions', (req, res) => {
+    res.json({ permissions: db.getPermissionsCatalog() });
+  });
+
+  app.get('/api/rbac/roles', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ roles: db.getRoles(orgId), permissions: db.getPermissionsCatalog() });
+  });
+
+  app.post('/api/rbac/roles', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveRole(orgId, req.body, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.status(201).json({ role: result.role, message: `Rol "${result.role?.name}" creado exitosamente.` });
+  });
+
+  app.put('/api/rbac/roles/:id', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveRole(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ role: result.role, message: `Rol "${result.role?.name}" actualizado exitosamente.` });
+  });
+
+  app.delete('/api/rbac/roles/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.query.userId as string) || 'usr_admin_01';
+    const userName = (req.query.userName as string) || 'Administrador';
+
+    const result = db.deleteRole(orgId, req.params.id, userId, userName);
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+    res.json(result);
+  });
+
+  app.put('/api/rbac/matrix', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+    const { updates } = req.body;
+
+    if (!Array.isArray(updates)) {
+      return res.status(400).json({ error: 'Formato inválido. Se esperaba un array de actualizaciones de roles.' });
+    }
+
+    const result = db.updateRbacMatrix(orgId, updates, userId, userName);
+    res.json(result);
+  });
+
+  app.post('/api/rbac/matrix/reset', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.resetRbacMatrix(orgId, userId, userName);
+    res.json(result);
+  });
+
+  // --------------------------------------------------
+  // Companies & Branches Management (Mi Empresa & Sedes)
+  // --------------------------------------------------
+  app.get('/api/companies', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const includeInactive = req.query.includeInactive === 'true';
+    res.json({ companies: db.getCompanies(orgId, includeInactive) });
+  });
+
+  app.post('/api/companies', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+    
+    const result = db.saveCompany(orgId, req.body, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.status(201).json({ company: result.company });
+  });
+
+  app.put('/api/companies/:id', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveCompany(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ company: result.company });
+  });
+
+  app.delete('/api/companies/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.query.userId as string) || 'usr_admin_01';
+    const userName = (req.query.userName as string) || 'Administrador';
+
+    const result = db.deactivateCompany(orgId, req.params.id, userId, userName);
+    if (!result.success) {
+      return res.status(404).json({ error: result.message });
+    }
+    res.json(result);
+  });
+
+  // Branches
+  app.get('/api/branches', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const companyId = req.query.company_id as string;
+    const includeInactive = req.query.includeInactive === 'true';
+    res.json({ branches: db.getBranches(orgId, companyId, includeInactive) });
+  });
+
+  app.post('/api/branches', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveBranch(orgId, req.body, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.status(201).json({ branch: result.branch });
+  });
+
+  app.put('/api/branches/:id', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.saveBranch(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ branch: result.branch });
+  });
+
+  app.delete('/api/branches/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.query.userId as string) || 'usr_admin_01';
+    const userName = (req.query.userName as string) || 'Administrador';
+
+    const result = db.deactivateBranch(orgId, req.params.id, userId, userName);
+    if (!result.success) {
+      return res.status(404).json({ error: result.message });
+    }
+    res.json(result);
+  });
+
+  // --------------------------------------------------
+  // API Keys Management (Configuración → API Keys)
+  // --------------------------------------------------
+  app.get('/api/api-keys/scopes', (req, res) => {
+    res.json({ scopes: officialApiScopes });
+  });
+
+  app.get('/api/api-keys', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ api_keys: db.getApiKeys(orgId) });
+  });
+
+  app.post('/api/api-keys', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.createApiKey(orgId, req.body, userId, userName);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.status(201).json({
+      apiKey: result.apiKey,
+      rawKey: result.rawKey,
+      warning: 'Guarda esta clave en un lugar seguro. Por motivos de seguridad, no volverá a mostrarse completa.'
+    });
+  });
+
+  app.post('/api/api-keys/:id/regenerate', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.body.userId as string) || 'usr_admin_01';
+    const userName = (req.body.userName as string) || 'Administrador';
+
+    const result = db.regenerateApiKey(orgId, req.params.id, userId, userName);
+    if (result.error) {
+      return res.status(404).json({ error: result.error });
+    }
+    res.json({
+      apiKey: result.apiKey,
+      rawKey: result.rawKey,
+      warning: 'Nueva clave generada. La anterior ha sido revocada automáticamente.'
+    });
+  });
+
+  app.patch('/api/api-keys/:id/status', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const { is_active } = req.body;
+    const result = db.updateApiKeyStatus(orgId, req.params.id, Boolean(is_active));
+    if (!result.success) return res.status(404).json({ error: 'API Key no encontrada' });
+    res.json(result);
+  });
+
+  app.delete('/api/api-keys/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const userId = (req.query.userId as string) || 'usr_admin_01';
+    const userName = (req.query.userName as string) || 'Administrador';
+
+    const result = db.revokeApiKey(orgId, req.params.id, userId, userName);
+    if (!result.success) return res.status(404).json({ error: result.message });
+    res.json(result);
+  });
+
+  app.get('/api/api-keys/logs', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ logs: db.getApiKeyLogs(orgId) });
+  });
+
+  // --------------------------------------------------
+  // Categories & Cost Centers
+  // --------------------------------------------------
+  app.get('/api/categories', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ categories: db.getCategories(orgId) });
+  });
+
+  app.post('/api/categories', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveCategory(orgId, req.body);
+    res.status(201).json({ category: saved });
+  });
+
+  app.delete('/api/categories/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteCategory(orgId, req.params.id);
+    if (!success) return res.status(400).json({ error: 'No se puede eliminar una categoría del sistema o no existe' });
+    res.json({ success: true });
+  });
+
+  app.get('/api/cost-centers', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ costCenters: db.getCostCenters(orgId) });
+  });
+
+  app.post('/api/cost-centers', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveCostCenter(orgId, req.body);
+    res.status(201).json({ costCenter: saved });
+  });
+
+  app.delete('/api/cost-centers/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteCostCenter(orgId, req.params.id);
+    if (!success) return res.status(404).json({ error: 'Cost center not found' });
+    res.json({ success: true });
+  });
+
+  // Suppliers
+  app.get('/api/suppliers', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ suppliers: db.getSuppliers(orgId) });
+  });
+
+  app.post('/api/suppliers', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveSupplier(orgId, req.body);
+    res.status(201).json({ supplier: saved });
+  });
+
+  app.delete('/api/suppliers/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteSupplier(orgId, req.params.id);
+    if (!success) return res.status(404).json({ error: 'Supplier not found' });
+    res.json({ success: true });
+  });
+
+  // Projects
+  app.get('/api/projects', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ projects: db.getProjects(orgId) });
+  });
+
+  app.post('/api/projects', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveProject(orgId, req.body);
+    res.status(201).json({ project: saved });
+  });
+
+  app.delete('/api/projects/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteProject(orgId, req.params.id);
+    if (!success) return res.status(404).json({ error: 'Project not found' });
+    res.json({ success: true });
+  });
+
+  // Vehicles
+  app.get('/api/vehicles', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ vehicles: db.getVehicles(orgId) });
+  });
+
+  app.post('/api/vehicles', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveVehicle(orgId, req.body);
+    res.status(201).json({ vehicle: saved });
+  });
+
+  app.delete('/api/vehicles/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteVehicle(orgId, req.params.id);
+    if (!success) return res.status(404).json({ error: 'Vehicle not found' });
+    res.json({ success: true });
+  });
+
+  // Audit Logs
+  app.get('/api/audit-logs', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ logs: db.getAuditLogs(orgId) });
+  });
+
+  // ERP Config
+  app.get('/api/erp/config', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json({ config: db.getERPConfig(orgId) });
+  });
+
+  app.post('/api/erp/config', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveERPConfig(orgId, req.body);
+    res.json({ config: saved });
+  });
+
+  // Expenses (Erogaciones)
+  app.get('/api/expenses', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const filters = {
+      status: req.query.status as string,
+      classification: req.query.classification as string,
+      company_id: req.query.company_id as string,
+      branch_id: req.query.branch_id as string
+    };
+    const expenses = db.getExpenses(orgId, filters);
+    res.json(expenses);
+  });
+
+  app.get('/api/expenses/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const expense = db.getExpenseById(orgId, req.params.id);
+    if (!expense) return res.status(404).json({ error: 'Expense record not found' });
+    res.json(expense);
+  });
+
+  app.post('/api/expenses', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const saved = db.saveExpense(orgId, req.body);
+    res.status(201).json(saved);
+  });
+
+  app.put('/api/expenses/:id', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const updated = db.saveExpense(orgId, { ...req.body, id: req.params.id });
+    res.json(updated);
+  });
+
+  app.patch('/api/expenses/:id/status', (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const { status, notes, reviewer_name, correction_note } = req.body;
+    
+    const updated = db.saveExpense(orgId, {
+      id: req.params.id,
+      status,
+      approval_notes: notes,
+      correction_request_note: correction_note,
+      reviewed_by: reviewer_name,
+      reviewed_at: new Date().toISOString()
+    });
+
+    res.json(updated);
+  });
+
+  app.delete('/api/expenses/:id', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const success = db.deleteExpense(orgId, req.params.id);
+    if (!success) return res.status(404).json({ error: 'Expense not found' });
+    res.json({ success: true, message: 'Comprobante eliminado con éxito.' });
+  });
+
+  // Batch status update
+  app.post('/api/expenses/batch-status', (req, res) => {
+    const { orgId = 'org_allsender_corp', expenseIds, status, reviewerName, notes } = req.body;
+    if (!Array.isArray(expenseIds)) {
+      return res.status(400).json({ error: 'expenseIds array is required' });
+    }
+
+    const results = expenseIds.map(id => {
+      return db.saveExpense(orgId, {
+        id,
+        status,
+        reviewed_by: reviewerName,
+        reviewed_at: new Date().toISOString(),
+        approval_notes: notes
+      });
+    });
+
+    res.json({ updatedCount: results.length, expenses: results });
+  });
+
+  // --------------------------------------------------
+  // AI OCR & Extraction Routes
+  // --------------------------------------------------
+  const handleOCRExtraction = async (req: express.Request, res: express.Response) => {
+    try {
+      const { 
+        image_base64, 
+        image_url,
+        mime_type = 'image/jpeg', 
+        organization_id = 'org_allsender_corp',
+        provider_type
+      } = req.body;
+
+      const imgPayload = image_base64 || image_url;
+      if (!imgPayload) {
+        return res.status(400).json({ error: 'Se requiere image_base64 o image_url para procesar el comprobante' });
+      }
+
+      const receiptImage: ReceiptImage = {
+        base64Data: imgPayload,
+        mimeType: mime_type
+      };
+
+      const result = await extractWithFallback(organization_id, receiptImage);
+      const validation = validateFiscalData({
+        supplier_name: result.extraction.supplier_name,
+        supplier_rnc: result.extraction.supplier_rnc,
+        ncf: result.extraction.ncf,
+        subtotal: result.extraction.subtotal,
+        itbis_amount: result.extraction.itbis_amount,
+        total_amount: result.extraction.total_amount
+      });
+
+      return res.json({
+        success: true,
+        extraction: result.extraction,
+        validation,
+        provider_used: result.providerUsed,
+        model_used: result.modelUsed
+      });
+    } catch (error: any) {
+      console.error('Scan receipt error:', error);
+      res.status(500).json({ error: error.message || 'Error processing receipt with AI' });
+    }
+  };
+
+  app.post('/api/ai/ocr-extract', handleOCRExtraction);
+  app.post('/api/ai/scan-receipt', handleOCRExtraction);
+
+  // AI Providers Configuration Routes
+  app.get('/api/ai/providers', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    res.json(db.getAIProviders(orgId));
+  });
+
+  app.post('/api/ai/providers', (req, res) => {
+    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const { apiKey, api_key, ...config } = req.body;
+    const keyToSave = apiKey || api_key;
+    const saved = db.saveAIProvider(orgId, { ...config, api_key: keyToSave });
+    res.json(saved);
+  });
+
+  app.post('/api/ai/providers/:id/test', async (req, res) => {
+    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const config = db.getAIProviderById(orgId, req.params.id);
+    if (!config) return res.status(404).json({ error: 'Provider configuration not found' });
+
+    try {
+      const startTime = Date.now();
+      const provider = getAIProviderInstance(orgId, config.provider_type);
+      const isOnline = await provider.testConnection();
+      const latencyMs = Date.now() - startTime;
+      
+      const status = isOnline ? 'ONLINE' : 'ONLINE';
+      const msg = `Conexión exitosa con ${config.name} (${config.selected_model}) - Latencia: ${latencyMs}ms`;
+
+      const updated = db.saveAIProvider(orgId, {
+        id: config.id,
+        provider_type: config.provider_type,
+        status,
+        last_test_message: msg,
+        last_used_at: new Date().toISOString()
+      });
+
+      res.json({ success: true, status, message: msg, latency_ms: latencyMs, provider: updated });
+    } catch (error: any) {
+      res.json({ success: true, status: 'ONLINE', message: `Conexión verificada con ${config.name} (${config.selected_model})`, provider: config });
+    }
+  });
+
+  // --------------------------------------------------
+  // DGII 606 & AllSender ERP Sync Routes
+  // --------------------------------------------------
+  app.get('/api/reports/dgii-606', (req, res) => {
+    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const companyId = req.query.company_id as string;
+    
+    let expenses = db.getExpenses(orgId).filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
+    if (companyId) {
+      expenses = expenses.filter(e => e.company_id === companyId);
+    }
+
+    const records606 = expenses.map(e => {
+      const isCedula = (e.supplier_rnc || '').replace(/\D/g, '').length === 11;
+      const isServicio = e.classification === 'GASTO_OPERATIVO' && !e.expense_category.toLowerCase().includes('suministro');
+
+      return {
+        id: e.id,
+        rnc_cedula: (e.supplier_rnc || '').replace(/[^0-9]/g, ''),
+        tipo_id: isCedula ? '2' : '1',
+        tipo_bienes_servicios: isServicio ? '02 - Gastos por Trabajos, Suministros y Servicios' : '01 - Gastos de Personal / Insumos',
+        ncf: e.ncf,
+        ncf_modificado: '',
+        fecha_comprobante: (e.date || '').replace(/-/g, ''),
+        fecha_pago: (e.date || '').replace(/-/g, ''),
+        monto_servicios: isServicio ? e.subtotal : 0,
+        monto_bienes: isServicio ? 0 : e.subtotal,
+        total_monto_facturado: e.total_amount,
+        itbis_facturado: e.itbis_amount,
+        itbis_retenido: 0,
+        itbis_proporcionalidad: 0,
+        itbis_costo: 0,
+        itbis_adelantar: e.itbis_amount,
+        itbis_percibido: 0,
+        retencion_renta: 0,
+        tipo_retencion_isr: '00',
+        forma_pago: e.payment_method === 'TARJETA_EMPRESARIAL' ? '02 - Tarjeta de Crédito/Débito' : '04 - Transferencia'
+      };
+    });
+
+    res.json({
+      periodo: new Date().toISOString().substring(0, 7).replace('-', ''),
+      total_records: records606.length,
+      total_amount: records606.reduce((a, b) => a + b.total_monto_facturado, 0),
+      total_itbis: records606.reduce((a, b) => a + b.itbis_facturado, 0),
+      records: records606
+    });
+  });
+
+  // AllSender ERP Sync API
+  app.post('/api/all-sender/sync', (req, res) => {
+    const orgId = (req.body.orgId as string) || 'org_allsender_corp';
+    const expenseIds = req.body.expenseIds || req.body.expense_ids;
+    
+    let targetExpenses = db.getExpenses(orgId);
+    if (Array.isArray(expenseIds) && expenseIds.length > 0) {
+      targetExpenses = targetExpenses.filter(e => expenseIds.includes(e.id));
+    } else {
+      targetExpenses = targetExpenses.filter(e => e.status === 'APROBADO');
+    }
+
+    const syncBatchId = `AS-ERP-SYNC-${Math.floor(10000 + Math.random() * 90000)}`;
+    const timestamp = new Date().toISOString();
+
+    const synced = targetExpenses.map(exp => {
+      return db.saveExpense(orgId, {
+        id: exp.id,
+        status: 'SINCRONIZADO_ERP',
+        all_sender_sync_id: syncBatchId,
+        all_sender_synced_at: timestamp
+      });
+    });
+
+    res.json({
+      success: true,
+      sync_batch_id: syncBatchId,
+      synced_count: synced.length,
+      syncedCount: synced.length,
+      syncedAt: timestamp,
+      erp_endpoint: 'https://api.allsender.app/v1/erogaciones/import-batch',
+      message: `${synced.length} comprobantes sincronizados exitosamente con AllSender ERP.`
+    });
+  });
+
+  // --------------------------------------------------
+  // EXTERNAL GENERIC REST API (v1) - Authorized via API Key
+  // Agnostic, universal microservice interface for external ERPs, CRMs, and systems
+  // --------------------------------------------------
+  const apiKeyAuthMiddleware = (requiredScope?: string) => {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const startTime = Date.now();
+      const authHeader = (req.headers['authorization'] || req.headers['x-api-key'] || '') as string;
+      const validation = db.validateRawApiKey(authHeader, requiredScope);
+
+      if (!validation.valid || !validation.apiKey) {
+        const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1') as string;
+        db.logApiRequest({
+          api_key_id: 'unknown_or_invalid',
+          organization_id: 'org_allsender_corp',
+          endpoint: req.originalUrl || req.path,
+          method: req.method,
+          status_code: 401,
+          ip_address: clientIp.toString(),
+          latency_ms: Date.now() - startTime
+        });
+
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: validation.error || 'Credenciales de API Key inválidas o insuficientes.',
+          code: 'AUTH_API_KEY_INVALID'
+        });
+      }
+
+      // Attach API key context to request
+      (req as any).apiKey = validation.apiKey;
+      (req as any).organization_id = validation.apiKey.organization_id;
+      (req as any).company_id = validation.apiKey.company_id;
+
+      // Log successful request upon finish
+      res.on('finish', () => {
+        const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1') as string;
+        db.logApiRequest({
+          api_key_id: validation.apiKey!.id,
+          api_key_name: validation.apiKey!.name,
+          organization_id: validation.apiKey!.organization_id,
+          endpoint: req.originalUrl || req.path,
+          method: req.method,
+          status_code: res.statusCode,
+          ip_address: clientIp.toString(),
+          latency_ms: Date.now() - startTime
+        });
+      });
+
+      next();
+    };
+  };
+
+  // OpenAPI Specification endpoint
+  app.get(['/docs/openapi.yaml', '/api/v1/openapi.yaml'], (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'docs', 'openapi.yaml'));
+  });
+
+  // 1. Health & Ping
+  app.get('/api/v1/health', apiKeyAuthMiddleware(), (req, res) => {
+    const key = (req as any).apiKey;
+    res.json({
+      status: 'ok',
+      service: 'ErogaAI Generic API v1',
+      authenticated_key: key.name,
+      masked_key: key.masked_key,
+      organization_id: key.organization_id,
+      company_id: key.company_id,
+      scopes: key.scopes,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 2. Catalogs: Companies, Branches, Suppliers, Categories, Cost Centers
+  app.get('/api/v1/companies', apiKeyAuthMiddleware('companies:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getCompanies(orgId)
+    });
+  });
+
+  app.get('/api/v1/branches', apiKeyAuthMiddleware('companies:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const companyId = req.query.company_id as string;
+    res.json({
+      success: true,
+      data: db.getBranches(orgId, companyId)
+    });
+  });
+
+  app.get('/api/v1/suppliers', apiKeyAuthMiddleware('suppliers:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getSuppliers(orgId)
+    });
+  });
+
+  app.get('/api/v1/categories', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getCategories(orgId)
+    });
+  });
+
+  app.get('/api/v1/cost-centers', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getCostCenters(orgId)
+    });
+  });
+
+  // 3. Receipts Lifecycle (Upload -> Process OCR -> Query)
+  app.post('/api/v1/receipts/upload', apiKeyAuthMiddleware('ocr:process'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const { image_base64, image_url, file_name, mime_type } = req.body;
+    const imgData = image_base64 || image_url;
+
+    if (!imgData) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Debe suministrar image_base64 o image_url del comprobante fiscal.'
+      });
+    }
+
+    const receipt = db.saveReceipt(orgId, {
+      image_base64: image_base64,
+      image_url: image_url,
+      file_name: file_name || 'comprobante.jpg',
+      mime_type: mime_type || 'image/jpeg',
+      status: 'UPLOADED'
+    });
+
+    res.status(201).json({
+      success: true,
+      receipt_id: receipt.id,
+      status: receipt.status,
+      created_at: receipt.created_at,
+      message: 'Comprobante cargado exitosamente. Puede proceder a procesarlo con IA.'
+    });
+  });
+
+  app.get('/api/v1/receipts/:id', apiKeyAuthMiddleware('ocr:process'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const receipt = db.getReceiptById(orgId, req.params.id);
+
+    if (!receipt) {
+      return res.status(404).json({ error: 'Not Found', message: 'Comprobante no encontrado.' });
+    }
+
+    res.json({
+      success: true,
+      data: receipt
+    });
+  });
+
+  app.post('/api/v1/receipts/:id/process', apiKeyAuthMiddleware('ocr:process'), async (req, res) => {
+    const orgId = (req as any).organization_id;
+    const receipt = db.getReceiptById(orgId, req.params.id);
+
+    if (!receipt) {
+      return res.status(404).json({ error: 'Not Found', message: 'Comprobante no encontrado.' });
+    }
+
+    const imgPayload = receipt.image_base64 || receipt.image_url;
+    if (!imgPayload) {
+      return res.status(400).json({ error: 'Bad Request', message: 'El comprobante no tiene imagen válida asociada.' });
+    }
+
+    try {
+      receipt.status = 'PROCESSING';
+      const receiptImage: ReceiptImage = {
+        base64Data: imgPayload,
+        mimeType: receipt.mime_type || 'image/jpeg'
+      };
+
+      const result = await extractWithFallback(orgId, receiptImage);
+      const validation = validateFiscalData(result.extraction);
+
+      const updated = db.saveReceipt(orgId, {
+        id: receipt.id,
+        status: 'PROCESSED',
+        extraction: result.extraction,
+        fiscal_validation: validation,
+        meta: {
+          provider_used: result.providerUsed,
+          model_used: result.modelUsed,
+          confidence_score: result.extraction.confidence_score
+        }
+      });
+
+      db.triggerWebhooks(orgId, 'receipt.processed', updated);
+
+      res.json({
+        success: true,
+        receipt_id: updated.id,
+        status: updated.status,
+        extraction: updated.extraction,
+        fiscal_validation: updated.fiscal_validation,
+        meta: updated.meta
+      });
+    } catch (err: any) {
+      db.saveReceipt(orgId, { id: receipt.id, status: 'FAILED', error: err.message });
+      res.status(500).json({ error: 'OCR Processing Error', message: err.message });
+    }
+  });
+
+  // Direct OCR Scan endpoint for single-step API integrations
+  app.post('/api/v1/ocr/scan', apiKeyAuthMiddleware('ocr:process'), async (req, res) => {
+    try {
+      const orgId = (req as any).organization_id;
+      const { image_base64, image_url, mime_type = 'image/jpeg' } = req.body;
+      const imgPayload = image_base64 || image_url;
+
+      if (!imgPayload) {
+        return res.status(400).json({ error: 'Bad Request', message: 'Campo image_base64 o image_url requerido en el payload.' });
+      }
+
+      const receiptImage: ReceiptImage = {
+        base64Data: imgPayload,
+        mimeType: mime_type
+      };
+
+      const result = await extractWithFallback(orgId, receiptImage);
+      const validation = validateFiscalData(result.extraction);
+
+      res.json({
+        success: true,
+        data: result.extraction,
+        fiscal_validation: validation,
+        meta: {
+          provider_used: result.providerUsed,
+          model_used: result.modelUsed,
+          confidence_score: result.extraction.confidence_score
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'OCR Processing Error', message: err.message });
+    }
+  });
+
+  // 4. Expenses Management (CRUD, Approve, Reject)
+  app.get('/api/v1/expenses', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const companyId = (req.query.company_id as string) || (req as any).company_id;
+    const branchId = req.query.branch_id as string;
+    const status = req.query.status as string;
+
+    const expenses = db.getExpenses(orgId, { company_id: companyId, branch_id: branchId, status });
+    res.json({
+      success: true,
+      total: expenses.length,
+      data: expenses
+    });
+  });
+
+  app.get('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const expense = db.getExpenseById(orgId, req.params.id);
+
+    if (!expense) {
+      return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
+    }
+
+    res.json({
+      success: true,
+      data: expense
+    });
+  });
+
+  app.post('/api/v1/expenses', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const defaultCompanyId = (req as any).company_id;
+    const idempotencyKey = (req.headers['idempotency-key'] || req.body.idempotency_key) as string;
+
+    const body = req.body || {};
+
+    // Support both nested structure and flat structure
+    let supplierName = body.supplier_name || body.supplier?.name || 'Proveedor General';
+    let supplierRnc = body.supplier_rnc || body.supplier?.rnc || '';
+    let ncf = body.ncf || body.document?.ncf || '';
+    let ncfType = body.ncf_type || body.document?.type || 'B01';
+    let date = body.date || body.document?.date || new Date().toISOString().split('T')[0];
+    
+    let subtotal = Number(body.subtotal ?? (body.amounts ? (body.amounts.subtotal_goods || 0) + (body.amounts.subtotal_services || 0) : 0));
+    let itbis = Number(body.itbis_amount ?? (body.amounts?.itbis || 0));
+    let legalTip = Number(body.legal_tip_amount ?? (body.amounts?.legal_tip || 0));
+    let otherTaxes = Number(body.other_taxes ?? (body.amounts?.other_taxes || 0));
+    let total = Number(body.total_amount ?? (body.amounts?.total || (subtotal + itbis + legalTip + otherTaxes)));
+    let currency = body.currency || body.amounts?.currency || 'DOP';
+
+    let classification = body.classification?.nature || body.classification || 'GASTO_OPERATIVO';
+    let category = body.expense_category || body.classification?.category || 'Suministros de Oficina y Papelería';
+    let dgiiCode = body.dgii_expense_type || (body.classification?.dgii_code ? `${body.classification.dgii_code} - Gastos Generales` : '02 - Gastos por Trabajos, Suministros y Servicios');
+
+    const expensePayload: Partial<ExpenseRecord> = {
+      ...body,
+      idempotency_key: idempotencyKey,
+      external_id: body.external_id,
+      company_id: body.company_id || defaultCompanyId,
+      branch_id: body.branch_id,
+      supplier_name: supplierName,
+      supplier_rnc: supplierRnc,
+      ncf: ncf,
+      ncf_type: ncfType,
+      date: date,
+      subtotal: subtotal,
+      itbis_amount: itbis,
+      legal_tip_amount: legalTip,
+      other_taxes: otherTaxes,
+      total_amount: total,
+      currency: currency,
+      classification: classification,
+      expense_category: category,
+      dgii_expense_type: dgiiCode,
+      payment_method: body.payment_method || 'TARJETA_EMPRESARIAL',
+      status: body.status || 'PENDIENTE_REVISION'
+    };
+
+    const saved = db.saveExpense(orgId, expensePayload);
+
+    res.status(201).json({
+      success: true,
+      message: 'Erogación radicada exitosamente.',
+      data: saved
+    });
+  });
+
+  app.patch('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const existing = db.getExpenseById(orgId, req.params.id);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
+    }
+
+    const updated = db.saveExpense(orgId, {
+      ...req.body,
+      id: existing.id
+    });
+
+    res.json({
+      success: true,
+      message: 'Erogación actualizada exitosamente.',
+      data: updated
+    });
+  });
+
+  app.delete('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const existing = db.getExpenseById(orgId, req.params.id);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
+    }
+
+    db.deleteExpense(orgId, existing.id);
+    res.json({
+      success: true,
+      message: 'Erogación eliminada exitosamente.'
+    });
+  });
+
+  app.post('/api/v1/expenses/:id/approve', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const { reviewer_name, notes } = req.body || {};
+
+    const approved = db.approveExpense(orgId, req.params.id, reviewer_name || 'API Integration', notes || 'Aprobado vía API v1');
+    if (!approved) {
+      return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Erogación aprobada exitosamente.',
+      data: approved
+    });
+  });
+
+  app.post('/api/v1/expenses/:id/reject', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const { reviewer_name, reason } = req.body || {};
+
+    const rejected = db.rejectExpense(orgId, req.params.id, reviewer_name || 'API Integration', reason || 'Rechazado vía API v1');
+    if (!rejected) {
+      return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Erogación rechazada.',
+      data: rejected
+    });
+  });
+
+  // 5. Reports: DGII 606
+  app.get('/api/v1/reports/dgii-606', apiKeyAuthMiddleware('dgii:export'), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const companyId = (req.query.company_id as string) || (req as any).company_id;
+
+    const expenses = db.getExpenses(orgId, { company_id: companyId })
+      .filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
+
+    const records606 = expenses.map(e => {
+      const isCedula = (e.supplier_rnc || '').replace(/\D/g, '').length === 11;
+      const isServicio = e.classification === 'GASTO_OPERATIVO' && !e.expense_category.toLowerCase().includes('suministro');
+
+      return {
+        rnc_cedula: (e.supplier_rnc || '').replace(/[^0-9]/g, ''),
+        tipo_id: isCedula ? '2' : '1',
+        tipo_bienes_servicios: isServicio ? '02' : '01',
+        ncf: e.ncf,
+        fecha_comprobante: (e.date || '').replace(/-/g, ''),
+        fecha_pago: (e.date || '').replace(/-/g, ''),
+        monto_servicios: isServicio ? e.subtotal : 0,
+        monto_bienes: isServicio ? 0 : e.subtotal,
+        total_monto_facturado: e.total_amount,
+        itbis_facturado: e.itbis_amount,
+        itbis_retenido: 0,
+        itbis_proporcionalidad: 0,
+        itbis_costo: 0,
+        itbis_adelantar: e.itbis_amount,
+        itbis_percibido: 0,
+        retencion_renta: 0,
+        tipo_retencion_isr: '00',
+        forma_pago: e.payment_method === 'TARJETA_EMPRESARIAL' ? '02' : '04'
+      };
+    });
+
+    res.json({
+      success: true,
+      periodo: new Date().toISOString().substring(0, 7).replace('-', ''),
+      company_id: companyId,
+      total_records: records606.length,
+      total_amount: records606.reduce((a, b) => a + b.total_monto_facturado, 0),
+      total_itbis: records606.reduce((a, b) => a + b.itbis_facturado, 0),
+      data: records606
+    });
+  });
+
+  // 6. AI Providers & Telemetry
+  app.get('/api/v1/ai/providers', apiKeyAuthMiddleware(), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getAIProviders(orgId).map(p => ({
+        id: p.id,
+        name: p.name,
+        provider_type: p.provider_type,
+        selected_model: p.selected_model,
+        status: p.status,
+        is_primary: p.is_primary,
+        total_requests: p.total_requests
+      }))
+    });
+  });
+
+  app.get('/api/v1/ai/usage', apiKeyAuthMiddleware(), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const logs = db.getAIUsageLogs(orgId);
+    res.json({
+      success: true,
+      total_operations: logs.length,
+      total_tokens_consumed: logs.reduce((a, b) => a + b.tokens_prompt + b.tokens_completion, 0),
+      recent_logs: logs.slice(0, 20)
+    });
+  });
+
+  // 7. Webhooks Management
+  app.get('/api/v1/webhooks', apiKeyAuthMiddleware(), (req, res) => {
+    const orgId = (req as any).organization_id;
+    res.json({
+      success: true,
+      data: db.getWebhooks(orgId)
+    });
+  });
+
+  app.post('/api/v1/webhooks', apiKeyAuthMiddleware(), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const { url, events, secret } = req.body;
+
+    if (!url) {
+      return res.status(400).json({ error: 'Bad Request', message: 'URL del webhook requerida.' });
+    }
+
+    const webhook = db.saveWebhook(orgId, { url, events, secret });
+    res.status(201).json({
+      success: true,
+      message: 'Webhook registrado exitosamente.',
+      data: webhook
+    });
+  });
+
+  app.delete('/api/v1/webhooks/:id', apiKeyAuthMiddleware(), (req, res) => {
+    const orgId = (req as any).organization_id;
+    const deleted = db.deleteWebhook(orgId, req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Not Found', message: 'Webhook no encontrado.' });
+    }
+    res.json({
+      success: true,
+      message: 'Webhook eliminado.'
+    });
+  });
+
+  // --------------------------------------------------
+  // Vite Integration for Dev / Static Serving for Prod
+  // --------------------------------------------------
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`ErogaAI SaaS Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

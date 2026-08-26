@@ -1,0 +1,518 @@
+openapi: 3.0.3
+info:
+  title: ErogaAI REST API
+  version: 1.0.0
+  description: |
+    API REST genérica y modular de ErogaAI para la integración universal de erogaciones corporativas, extracción fiscal inteligente con IA y cumplimiento DGII 606.
+    
+    Permite a cualquier sistema externo (ERP, CRM, software de contabilidad, aplicaciones móviles) registrar gastos, subir comprobantes, procesar imágenes con IA y consultar reportes fiscales mediante API Keys seguras.
+servers:
+  - url: /api/v1
+    description: Servidor de API v1
+paths:
+  /health:
+    get:
+      summary: Verificación de estado y credenciales
+      description: Comprueba la disponibilidad del servicio y valida la autenticidad de la API Key enviada.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Servicio operativo y autenticado correctamente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: ErogaAI Generic API v1
+                  authenticated_key:
+                    type: string
+                    example: Integración ERP Externa
+                  masked_key:
+                    type: string
+                    example: eroga_live_••••••••8819
+                  organization_id:
+                    type: string
+                    example: org_allsender_corp
+                  company_id:
+                    type: string
+                    example: comp_main
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                    example: ["ocr:process", "expenses:write", "expenses:read"]
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /companies:
+    get:
+      summary: Catálogo de razones sociales / empresas
+      description: Obtiene las empresas filiales configuradas en la organización.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Lista de empresas filiales disponibles.
+
+  /branches:
+    get:
+      summary: Catálogo de sucursales y sedes
+      description: Obtiene las sucursales vinculadas a la empresa o a la organización.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: company_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtrar por ID de empresa filial
+      responses:
+        '200':
+          description: Lista de sucursales disponibles.
+
+  /suppliers:
+    get:
+      summary: Catálogo de proveedores y RNC
+      description: Obtiene la lista de suplidores registrados y su estado ante la DGII.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Lista de proveedores.
+
+  /categories:
+    get:
+      summary: Catálogo de categorías de gastos
+      description: Obtiene las cuentas y conceptos contables oficiales homologados.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Lista de categorías fiscales.
+
+  /cost-centers:
+    get:
+      summary: Centros de costos
+      description: Obtiene los centros de costos departamentales para imputación presupuestaria.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Lista de centros de costo.
+
+  /receipts/upload:
+    post:
+      summary: Carga de imagen o documento de comprobante fiscal
+      description: Registra un comprobante para su posterior análisis con IA.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                image_base64:
+                  type: string
+                  description: Cadena base64 de la imagen o PDF
+                image_url:
+                  type: string
+                  description: URL pública accesible del comprobante
+                file_name:
+                  type: string
+                  example: factura_suministros_001.jpg
+                mime_type:
+                  type: string
+                  example: image/jpeg
+      responses:
+        '201':
+          description: Comprobante cargado exitosamente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  receipt_id:
+                    type: string
+                    example: rcp_1772150000000_a1b2
+                  status:
+                    type: string
+                    example: UPLOADED
+
+  /receipts/{id}:
+    get:
+      summary: Consulta estado de un comprobante
+      description: Obtiene el estado y resultado de extracción de un comprobante por su ID.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detalle del comprobante y datos extraídos.
+
+  /receipts/{id}/process:
+    post:
+      summary: Ejecución de extracción fiscal OCR con IA
+      description: Dispara el análisis con los motores de IA configurados para extraer NCF, RNC, ITBIS y montos.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Extracción completada y validada fiscalmente.
+
+  /ocr/scan:
+    post:
+      summary: Extracción OCR directa en un solo paso
+      description: Envía la imagen y recibe instantáneamente los datos fiscales extraídos por IA.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                image_base64:
+                  type: string
+                image_url:
+                  type: string
+                mime_type:
+                  type: string
+                  default: image/jpeg
+      responses:
+        '200':
+          description: Extracción y validación fiscal directa.
+
+  /expenses:
+    get:
+      summary: Consulta y listado de erogaciones
+      description: Obtiene los registros de gastos filtrados por empresa, sucursal o estado.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: company_id
+          in: query
+          schema:
+            type: string
+        - name: branch_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [BORRADOR, PENDIENTE_REVISION, APROBADO, RECHAZADO, REQUIERE_CORRECCION, SINCRONIZADO_ERP]
+      responses:
+        '200':
+          description: Listado de erogaciones.
+
+    post:
+      summary: Creación y radicación de erogación
+      description: Registra una nueva erogación o factura con soporte para Idempotency-Key y estructura anidada o plana.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Clave única para evitar duplicación de solicitudes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseInput'
+      responses:
+        '201':
+          description: Erogación creada exitosamente.
+
+  /expenses/{id}:
+    get:
+      summary: Obtener detalle de erogación
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detalle de la erogación.
+
+    patch:
+      summary: Actualizar erogación
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Erogación modificada.
+
+    delete:
+      summary: Eliminar erogación
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Erogación eliminada.
+
+  /expenses/{id}/approve:
+    post:
+      summary: Aprobar erogación fiscal
+      description: Cambia el estado a APROBADO e incluye notas de revisión.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer_name:
+                  type: string
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Erogación aprobada.
+
+  /expenses/{id}/reject:
+    post:
+      summary: Rechazar erogación fiscal
+      description: Cambia el estado a RECHAZADO e incluye el motivo de rechazo.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer_name:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Erogación rechazada.
+
+  /reports/dgii-606:
+    get:
+      summary: Exportación fiscal DGII 606
+      description: Genera la estructura oficial de compras y retenciones para la Dirección General de Impuestos Internos.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - name: company_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Estructura oficial 606 en formato JSON compatible.
+
+  /webhooks:
+    get:
+      summary: Listar webhooks suscritos
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Lista de webhooks activos.
+
+    post:
+      summary: Registrar suscripción a webhooks
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+                - events
+              properties:
+                url:
+                  type: string
+                  example: https://api.miempresa.com/webhooks/eroga-ai
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum: [expense.created, expense.updated, expense.approved, expense.rejected, receipt.processed, expense.sync.completed]
+                secret:
+                  type: string
+      responses:
+        '201':
+          description: Webhook registrado.
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: APIKey
+      description: Clave de autenticación en la cabecera `Authorization: Bearer eroga_live_xxxxxxxxx`
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Clave de autenticación en la cabecera `X-API-Key: eroga_live_xxxxxxxxx`
+
+  schemas:
+    ExpenseInput:
+      type: object
+      properties:
+        external_id:
+          type: string
+          example: compra-2026-00045
+        company_id:
+          type: string
+          example: comp_main
+        branch_id:
+          type: string
+          example: branch_main
+        supplier:
+          type: object
+          properties:
+            name:
+              type: string
+              example: Ferretería Dominicana SRL
+            rnc:
+              type: string
+              example: 101123456
+        document:
+          type: object
+          properties:
+            ncf:
+              type: string
+              example: B0100001234
+            type:
+              type: string
+              example: B01
+            date:
+              type: string
+              format: date
+              example: 2026-08-26
+        amounts:
+          type: object
+          properties:
+            subtotal_goods:
+              type: number
+              example: 5000.00
+            subtotal_services:
+              type: number
+              example: 0.00
+            itbis:
+              type: number
+              example: 900.00
+            legal_tip:
+              type: number
+              example: 0.00
+            other_taxes:
+              type: number
+              example: 0.00
+            total:
+              type: number
+              example: 5900.00
+            currency:
+              type: string
+              example: DOP
+        classification:
+          type: object
+          properties:
+            nature:
+              type: string
+              example: GASTO_OPERATIVO
+            category:
+              type: string
+              example: Mantenimiento y Reparaciones
+            dgii_code:
+              type: string
+              example: "02"
+        payment_method:
+          type: string
+          example: TRANSFERENCIA
+        description:
+          type: string
+          example: Compra de materiales de mantenimiento

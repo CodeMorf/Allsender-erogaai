@@ -1,0 +1,94 @@
+{
+  "name": "ErogaAI — Gestión Fiscal & Gastos DGII",
+  "short_name": "ErogaAI",
+  "description": "Escaneo inteligente de facturas, validación NCF/RNC y reporte fiscal DGII 606",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "dir": "ltr",
+  "lang": "es-DO",
+  "categories": [
+    "finance",
+    "business",
+    "productivity"
+  ],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Escanear Factura",
+      "short_name": "Escanear",
+      "description": "Captura y OCR de comprobante fiscal",
+      "url": "/?action=scan",
+      "icons": [
+        {
+          "src": "/icons/icon-192.svg",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Consolidación de Costos",
+      "short_name": "Costos",
+      "description": "Balance consolidado por centro de costos",
+      "url": "/?view=cost-consolidation",
+      "icons": [
+        {
+          "src": "/icons/icon-192.svg",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Reporte DGII 606",
+      "short_name": "DGII 606",
+      "description": "Generación de formato 606 para impuestos",
+      "url": "/?view=dgii-606",
+      "icons": [
+        {
+          "src": "/icons/icon-192.svg",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icons/screenshot-mobile.svg",
+      "sizes": "390x844",
+      "type": "image/svg+xml",
+      "form_factor": "narrow",
+      "label": "Escaneo y Clasificación de Facturas con IA"
+    },
+    {
+      "src": "/icons/screenshot-desktop.svg",
+      "sizes": "1280x800",
+      "type": "image/svg+xml",
+      "form_factor": "wide",
+      "label": "Consolidación Contable y Fiscal DGII 606"
+    }
+  ]
+}
