@@ -1,6 +1,8 @@
 {
   "name": "ErogaAI SaaS",
-  "description": "Plataforma empresarial para registrar erogaciones mediante escaneo inteligente de tickets y facturas con IA, clasificación fiscal, validación RNC/NCF e integración AllSender ERP.",
+  "author": "CodeMorf (https://codemorf.tech/)",
+  "authorUrl": "https://codemorf.tech/",
+  "description": "Plataforma empresarial por CodeMorf para registrar erogaciones mediante escaneo inteligente de tickets y facturas con IA, clasificación fiscal, validación RNC/NCF e integración AllSender ERP.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
