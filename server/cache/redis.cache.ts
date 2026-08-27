@@ -1,5 +1,8 @@
+import { createRequire } from 'module';
 import { CacheService } from './cache.interface.ts';
 import { MemoryCacheService } from './memory.cache.ts';
+
+const _require = createRequire(import.meta.url);
 
 export class RedisCacheService implements CacheService {
   private redis: any = null;
@@ -8,8 +11,8 @@ export class RedisCacheService implements CacheService {
   constructor(redisUrl?: string) {
     this.fallbackMemory = new MemoryCacheService();
     try {
-      // Dynamic import to avoid crash if ioredis is absent
-      const Redis = require('ioredis');
+      // ESM-safe require via createRequire — avoids crash if ioredis is absent
+      const Redis = _require('ioredis');
       this.redis = new Redis(redisUrl || process.env.REDIS_URL || 'redis://localhost:6379', {
         maxRetriesPerRequest: 1,
         lazyConnect: true

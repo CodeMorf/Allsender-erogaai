@@ -15,6 +15,7 @@ import {
   logoutHandler, 
   forgotPasswordHandler 
 } from './server/auth.ts';
+import { authMiddleware, requestIdMiddleware, AuthenticatedRequest } from './server/middleware.ts';
 import { ExpenseRecord } from './src/types.ts';
 
 async function startServer() {
@@ -26,8 +27,11 @@ async function startServer() {
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
+  // Request ID on every request for tracing
+  app.use(requestIdMiddleware);
+
   // --------------------------------------------------
-  // REST API Routes (Internal & UI Support)
+  // PUBLIC routes (no session required)
   // --------------------------------------------------
 
   // Health check
@@ -87,12 +91,59 @@ async function startServer() {
   app.post('/api/auth/logout', logoutHandler);
   app.post('/api/auth/forgot-password', forgotPasswordHandler);
 
-  // Organizations
-  app.get('/api/organizations', (req, res) => {
+  // --------------------------------------------------
+  // PROTECTED API routes — require valid session cookie
+  // All routes below this line need authMiddleware
+  // --------------------------------------------------
+  app.use('/api', (req, res, next) => {
+    // Skip auth for: /api/health, /api/auth/*, /api/v1/* (uses API key auth), /api/session, /api/auth/me
+    const pub = ['/api/health', '/api/auth/', '/api/v1/', '/api/session', '/api/auth/me'];
+    if (pub.some(p => req.path.startsWith(p.replace('/api', '')))) return next();
+    return authMiddleware(req as AuthenticatedRequest, res, next);
+  });
+
+  // --------------------------------------------------
+  // Session & Authenticated User Info (public — no auth guard)
+  // --------------------------------------------------
+  app.get('/api/session', (req, res) => {
+    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+    }
+    const sessionData = db.validateSessionToken(token);
+    if (!sessionData || !sessionData.user) {
+      res.clearCookie('eroga_session');
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+    }
+    const orgId = sessionData.organization_id;
+    res.json({
+      organization: db.getOrganizationById(orgId),
+      companies: db.getCompanies(orgId),
+      branches: db.getBranches(orgId),
+      users: db.getUsers(orgId),
+      currentUser: sessionData.user
+    });
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return res.json({ user: null, organization: null });
+    const sessionData = db.validateSessionToken(token);
+    if (!sessionData || !sessionData.user) {
+      res.clearCookie('eroga_session');
+      return res.json({ user: null, organization: null });
+    }
+    res.json({ user: sessionData.user, organization: db.getOrganizationById(sessionData.organization_id) });
+  });
+
+  // --------------------------------------------------
+  // Organizations (platform admin only — guarded by authMiddleware above)
+  // --------------------------------------------------
+  app.get('/api/organizations', (req: AuthenticatedRequest, res) => {
     res.json({ organizations: db.getOrganizations() });
   });
 
-  app.post('/api/organizations', (req, res) => {
+  app.post('/api/organizations', (req: AuthenticatedRequest, res) => {
     const org = db.saveOrganization(req.body);
     res.status(201).json(org);
   });
@@ -101,15 +152,15 @@ async function startServer() {
   // Users & Team Management (Gestión de Equipo)
   // --------------------------------------------------
   app.get('/api/users', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const includeInactive = req.query.includeInactive === 'true';
     res.json({ users: db.getUsers(orgId, includeInactive) });
   });
 
   app.post('/api/users', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveUser(orgId, req.body, userId, userName);
     if (result.error) {
@@ -119,9 +170,9 @@ async function startServer() {
   });
 
   app.put('/api/users/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveUser(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
@@ -131,9 +182,9 @@ async function startServer() {
   });
 
   app.delete('/api/users/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.query.userId as string) || 'usr_admin_01';
-    const userName = (req.query.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.deactivateUser(orgId, req.params.id, userId, userName);
     if (!result.success) {
@@ -150,14 +201,14 @@ async function startServer() {
   });
 
   app.get('/api/rbac/roles', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ roles: db.getRoles(orgId), permissions: db.getPermissionsCatalog() });
   });
 
   app.post('/api/rbac/roles', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveRole(orgId, req.body, userId, userName);
     if (result.error) {
@@ -167,9 +218,9 @@ async function startServer() {
   });
 
   app.put('/api/rbac/roles/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveRole(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
@@ -179,9 +230,9 @@ async function startServer() {
   });
 
   app.delete('/api/rbac/roles/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.query.userId as string) || 'usr_admin_01';
-    const userName = (req.query.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.deleteRole(orgId, req.params.id, userId, userName);
     if (!result.success) {
@@ -191,9 +242,9 @@ async function startServer() {
   });
 
   app.put('/api/rbac/matrix', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
     const { updates } = req.body;
 
     if (!Array.isArray(updates)) {
@@ -205,9 +256,9 @@ async function startServer() {
   });
 
   app.post('/api/rbac/matrix/reset', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.resetRbacMatrix(orgId, userId, userName);
     res.json(result);
@@ -217,15 +268,15 @@ async function startServer() {
   // Companies & Branches Management (Mi Empresa & Sedes)
   // --------------------------------------------------
   app.get('/api/companies', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const includeInactive = req.query.includeInactive === 'true';
     res.json({ companies: db.getCompanies(orgId, includeInactive) });
   });
 
   app.post('/api/companies', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
     
     const result = db.saveCompany(orgId, req.body, userId, userName);
     if (result.error) {
@@ -235,9 +286,9 @@ async function startServer() {
   });
 
   app.put('/api/companies/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveCompany(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
@@ -247,9 +298,9 @@ async function startServer() {
   });
 
   app.delete('/api/companies/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.query.userId as string) || 'usr_admin_01';
-    const userName = (req.query.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.deactivateCompany(orgId, req.params.id, userId, userName);
     if (!result.success) {
@@ -260,16 +311,16 @@ async function startServer() {
 
   // Branches
   app.get('/api/branches', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const companyId = req.query.company_id as string;
     const includeInactive = req.query.includeInactive === 'true';
     res.json({ branches: db.getBranches(orgId, companyId, includeInactive) });
   });
 
   app.post('/api/branches', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveBranch(orgId, req.body, userId, userName);
     if (result.error) {
@@ -279,9 +330,9 @@ async function startServer() {
   });
 
   app.put('/api/branches/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.saveBranch(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
@@ -291,9 +342,9 @@ async function startServer() {
   });
 
   app.delete('/api/branches/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.query.userId as string) || 'usr_admin_01';
-    const userName = (req.query.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.deactivateBranch(orgId, req.params.id, userId, userName);
     if (!result.success) {
@@ -310,14 +361,14 @@ async function startServer() {
   });
 
   app.get('/api/api-keys', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ api_keys: db.getApiKeys(orgId) });
   });
 
   app.post('/api/api-keys', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.createApiKey(orgId, req.body, userId, userName);
     if (result.error) {
@@ -331,9 +382,9 @@ async function startServer() {
   });
 
   app.post('/api/api-keys/:id/regenerate', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.body.userId as string) || 'usr_admin_01';
-    const userName = (req.body.userName as string) || 'Administrador';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.regenerateApiKey(orgId, req.params.id, userId, userName);
     if (result.error) {
@@ -347,7 +398,7 @@ async function startServer() {
   });
 
   app.patch('/api/api-keys/:id/status', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
     const { is_active } = req.body;
     const result = db.updateApiKeyStatus(orgId, req.params.id, Boolean(is_active));
     if (!result.success) return res.status(404).json({ error: 'API Key no encontrada' });
@@ -355,9 +406,9 @@ async function startServer() {
   });
 
   app.delete('/api/api-keys/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const userId = (req.query.userId as string) || 'usr_admin_01';
-    const userName = (req.query.userName as string) || 'Administrador';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
+    const userId = (req as AuthenticatedRequest).user_id!;
+    const userName = (req as AuthenticatedRequest).user_name!;
 
     const result = db.revokeApiKey(orgId, req.params.id, userId, userName);
     if (!result.success) return res.status(404).json({ error: result.message });
@@ -365,7 +416,7 @@ async function startServer() {
   });
 
   app.get('/api/api-keys/logs', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ logs: db.getApiKeyLogs(orgId) });
   });
 
@@ -373,36 +424,36 @@ async function startServer() {
   // Categories & Cost Centers
   // --------------------------------------------------
   app.get('/api/categories', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ categories: db.getCategories(orgId) });
   });
 
   app.post('/api/categories', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveCategory(orgId, req.body);
     res.status(201).json({ category: saved });
   });
 
   app.delete('/api/categories/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteCategory(orgId, req.params.id);
     if (!success) return res.status(400).json({ error: 'No se puede eliminar una categoría del sistema o no existe' });
     res.json({ success: true });
   });
 
   app.get('/api/cost-centers', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ costCenters: db.getCostCenters(orgId) });
   });
 
   app.post('/api/cost-centers', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveCostCenter(orgId, req.body);
     res.status(201).json({ costCenter: saved });
   });
 
   app.delete('/api/cost-centers/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteCostCenter(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Cost center not found' });
     res.json({ success: true });
@@ -410,18 +461,18 @@ async function startServer() {
 
   // Suppliers
   app.get('/api/suppliers', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ suppliers: db.getSuppliers(orgId) });
   });
 
   app.post('/api/suppliers', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveSupplier(orgId, req.body);
     res.status(201).json({ supplier: saved });
   });
 
   app.delete('/api/suppliers/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteSupplier(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Supplier not found' });
     res.json({ success: true });
@@ -429,18 +480,18 @@ async function startServer() {
 
   // Projects
   app.get('/api/projects', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ projects: db.getProjects(orgId) });
   });
 
   app.post('/api/projects', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveProject(orgId, req.body);
     res.status(201).json({ project: saved });
   });
 
   app.delete('/api/projects/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteProject(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Project not found' });
     res.json({ success: true });
@@ -448,18 +499,18 @@ async function startServer() {
 
   // Vehicles
   app.get('/api/vehicles', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ vehicles: db.getVehicles(orgId) });
   });
 
   app.post('/api/vehicles', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveVehicle(orgId, req.body);
     res.status(201).json({ vehicle: saved });
   });
 
   app.delete('/api/vehicles/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteVehicle(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Vehicle not found' });
     res.json({ success: true });
@@ -467,25 +518,25 @@ async function startServer() {
 
   // Audit Logs
   app.get('/api/audit-logs', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ logs: db.getAuditLogs(orgId) });
   });
 
   // ERP Config
   app.get('/api/erp/config', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json({ config: db.getERPConfig(orgId) });
   });
 
   app.post('/api/erp/config', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveERPConfig(orgId, req.body);
     res.json({ config: saved });
   });
 
   // Expenses (Erogaciones)
   app.get('/api/expenses', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const filters = {
       status: req.query.status as string,
       classification: req.query.classification as string,
@@ -497,26 +548,26 @@ async function startServer() {
   });
 
   app.get('/api/expenses/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const expense = db.getExpenseById(orgId, req.params.id);
     if (!expense) return res.status(404).json({ error: 'Expense record not found' });
     res.json(expense);
   });
 
   app.post('/api/expenses', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const saved = db.saveExpense(orgId, req.body);
     res.status(201).json(saved);
   });
 
   app.put('/api/expenses/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
     const updated = db.saveExpense(orgId, { ...req.body, id: req.params.id });
     res.json(updated);
   });
 
   app.patch('/api/expenses/:id/status', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
     const { status, notes, reviewer_name, correction_note } = req.body;
     
     const updated = db.saveExpense(orgId, {
@@ -532,15 +583,16 @@ async function startServer() {
   });
 
   app.delete('/api/expenses/:id', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const success = db.deleteExpense(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true, message: 'Comprobante eliminado con éxito.' });
   });
 
   // Batch status update
-  app.post('/api/expenses/batch-status', (req, res) => {
-    const { orgId = 'org_allsender_corp', expenseIds, status, reviewerName, notes } = req.body;
+  app.post('/api/expenses/batch-status', (req: AuthenticatedRequest, res) => {
+    const orgId = req.organization_id!;
+    const { expenseIds, status, reviewerName, notes } = req.body;
     if (!Array.isArray(expenseIds)) {
       return res.status(400).json({ error: 'expenseIds array is required' });
     }
@@ -567,9 +619,11 @@ async function startServer() {
         image_base64, 
         image_url,
         mime_type = 'image/jpeg', 
-        organization_id = 'org_allsender_corp',
         provider_type
       } = req.body;
+
+      // Always use session-verified org — never trust body-supplied organization_id
+      const orgId = (req as AuthenticatedRequest).organization_id!;
 
       const imgPayload = image_base64 || image_url;
       if (!imgPayload) {
@@ -581,7 +635,7 @@ async function startServer() {
         mimeType: mime_type
       };
 
-      const result = await extractWithFallback(organization_id, receiptImage);
+      const result = await extractWithFallback(orgId, receiptImage);
       const validation = validateFiscalData({
         supplier_name: result.extraction.supplier_name,
         supplier_rnc: result.extraction.supplier_rnc,
@@ -609,12 +663,12 @@ async function startServer() {
 
   // AI Providers Configuration Routes
   app.get('/api/ai/providers', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     res.json(db.getAIProviders(orgId));
   });
 
   app.post('/api/ai/providers', (req, res) => {
-    const orgId = (req.body.organization_id as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const { apiKey, api_key, ...config } = req.body;
     const keyToSave = apiKey || api_key;
     const saved = db.saveAIProvider(orgId, { ...config, api_key: keyToSave });
@@ -622,7 +676,7 @@ async function startServer() {
   });
 
   app.post('/api/ai/providers/:id/test', async (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
     const config = db.getAIProviderById(orgId, req.params.id);
     if (!config) return res.status(404).json({ error: 'Provider configuration not found' });
 
@@ -653,7 +707,7 @@ async function startServer() {
   // DGII 606 & AllSender ERP Sync Routes
   // --------------------------------------------------
   app.get('/api/reports/dgii-606', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const companyId = req.query.company_id as string;
     
     let expenses = db.getExpenses(orgId).filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
@@ -700,7 +754,7 @@ async function startServer() {
 
   // AllSender ERP Sync API
   app.post('/api/all-sender/sync', (req, res) => {
-    const orgId = (req.body.orgId as string) || 'org_allsender_corp';
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const expenseIds = req.body.expenseIds || req.body.expense_ids;
     
     let targetExpenses = db.getExpenses(orgId);
@@ -747,7 +801,7 @@ async function startServer() {
         const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1') as string;
         db.logApiRequest({
           api_key_id: 'unknown_or_invalid',
-          organization_id: 'org_allsender_corp',
+          organization_id: 'unknown',
           endpoint: req.originalUrl || req.path,
           method: req.method,
           status_code: 401,

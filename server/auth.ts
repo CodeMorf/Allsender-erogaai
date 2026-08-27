@@ -100,10 +100,9 @@ export async function registerHandler(req: AuthenticatedRequest, res: Response) 
     });
 
     res.status(201).json({
-      message: 'Cuenta u organización creadas exitosamente.',
+      message: 'Cuenta y organización creadas exitosamente.',
       user,
-      organization: org,
-      sessionToken: session.token
+      organization: org
     });
   } catch (error: any) {
     console.error('Register error:', error);
@@ -127,13 +126,11 @@ export async function loginHandler(req: AuthenticatedRequest, res: Response) {
       return res.status(401).json({ error: 'Credenciales inválidas o cuenta desactivada.' });
     }
 
-    // Verify bcrypt hash or legacy string compare
-    let isMatch = false;
-    if (user.password_hash) {
-      isMatch = await bcrypt.compare(password, user.password_hash);
-    } else {
-      isMatch = (password === 'admin123' || password === 'password');
+    // Always verify bcrypt hash — no legacy fallback allowed in production
+    if (!user.password_hash) {
+      return res.status(401).json({ error: 'Cuenta sin credenciales configuradas. Contacte al administrador.' });
     }
+    const isMatch = await bcrypt.compare(password, user.password_hash);
 
     if (!isMatch) {
       return res.status(401).json({ error: 'Credenciales inválidas o contraseña incorrecta.' });
@@ -161,8 +158,7 @@ export async function loginHandler(req: AuthenticatedRequest, res: Response) {
     res.json({
       message: 'Inicio de sesión exitoso.',
       user,
-      organization: org,
-      sessionToken: session.token
+      organization: org
     });
   } catch (error: any) {
     console.error('Login error:', error);
