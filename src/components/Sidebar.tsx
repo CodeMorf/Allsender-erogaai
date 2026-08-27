@@ -372,16 +372,28 @@ export const Sidebar: React.FC = () => {
         </div>
 
         <div className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] text-slate-400 flex items-center justify-between px-1">
-          <span className="truncate max-w-[130px]">{organization?.name || 'Empresa'}</span>
-          <a 
-            href="https://codemorf.tech/" 
-            target="_blank" 
-            rel="noopener noreferrer" 
-            className="text-cyan-400 hover:text-cyan-300 font-bold transition-colors flex items-center gap-0.5"
-            title="Desarrollado por CodeMorf"
-          >
-            <span>by CodeMorf</span>
-          </a>
+          <span className="truncate max-w-[90px]">{organization?.name || 'Empresa'}</span>
+          <div className="flex items-center gap-2">
+            <a 
+              href="https://codemorf.tech/chat/docs/es/" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-blue-400 hover:text-blue-300 font-bold transition-colors"
+              title="Documentación Oficial CodeMorf"
+            >
+              Docs
+            </a>
+            <span className="text-slate-600">•</span>
+            <a 
+              href="https://codemorf.tech/" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-cyan-400 hover:text-cyan-300 font-bold transition-colors"
+              title="Desarrollado por CodeMorf"
+            >
+              by CodeMorf
+            </a>
+          </div>
         </div>
       </div>
     </div>

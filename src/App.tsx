@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext.js';
 import { ThemeProvider } from './context/ThemeContext.js';
 import { PWAProvider } from './context/PWAContext.js';
@@ -25,9 +25,31 @@ import { ERPIntegrationView } from './views/ERPIntegrationView.js';
 import { AuditLogView } from './views/AuditLogView.js';
 import { ApiKeysView } from './views/ApiKeysView.js';
 import { ApiDocsView } from './views/ApiDocsView.js';
+import { AuthView } from './views/AuthView.js';
+import { OnboardingView } from './views/OnboardingView.js';
 
 const MainLayout: React.FC = () => {
-  const { portal, activeView } = useApp();
+  const { portal, activeView, currentUser, fetchCompanies } = useApp();
+  const [isOnboardingCompleted, setIsOnboardingCompleted] = useState<boolean>(() => {
+    return localStorage.getItem('eroga_onboarding_done') === 'true';
+  });
+
+  // If user is not authenticated, render AuthView (Login / Register / Password Reset)
+  if (!currentUser) {
+    return <AuthView onSuccess={() => fetchCompanies()} />;
+  }
+
+  // If user is authenticated for the first time, show 7-step Onboarding Wizard
+  if (!isOnboardingCompleted) {
+    return (
+      <OnboardingView 
+        onComplete={() => {
+          setIsOnboardingCompleted(true);
+          localStorage.setItem('eroga_onboarding_done', 'true');
+        }} 
+      />
+    );
+  }
 
   const renderActiveView = () => {
     // If inside Super Admin Portal

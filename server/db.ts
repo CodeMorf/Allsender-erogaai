@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { 
   Organization, 
   Company, 
@@ -26,7 +27,7 @@ import {
   PermissionDefinition,
   RoleDefinition
 } from '../src/types.ts';
-import { encryptApiKey, maskApiKey, hashApiKey, generateRawApiKey } from './encryption.ts';
+import { encryptApiKey, decryptApiKey, maskApiKey, hashApiKey, generateRawApiKey } from './encryption.ts';
 
 // Official Standard Dominican Expense Categories (Official Catalog - System Only)
 const officialSystemCategories: ExpenseCategory[] = [
@@ -980,8 +981,67 @@ export class ErogaAIDatabase {
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }
 
-  getApiKeyById(orgId: string, id: string): ApiKey | undefined {
-    return this.apiKeys.find(k => k.organization_id === orgId && k.id === id);
+  private sessions: Array<{ token: string; user_id: string; organization_id: string; expires_at: Date; ip?: string; user_agent?: string }> = [];
+  private passwordResetTokens: Map<string, { user_id: string; expires_at: Date }> = new Map();
+
+  findUserByEmail(email: string): User | undefined {
+    if (!email) return undefined;
+    return this.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  }
+
+  createSession(userId: string, orgId: string, ip?: string, userAgent?: string): { token: string; expiresAt: Date } {
+    const token = `eroga_sess_${Date.now()}_${crypto.randomBytes(18).toString('hex')}`;
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    this.sessions.push({
+      token,
+      user_id: userId,
+      organization_id: orgId,
+      expires_at: expiresAt,
+      ip,
+      user_agent: userAgent
+    });
+    this.saveToDisk();
+    return { token, expiresAt };
+  }
+
+  validateSessionToken(token: string): { user: User; organization_id: string } | null {
+    if (!token) return null;
+    const session = this.sessions.find(s => s.token === token);
+    if (!session) return null;
+
+    if (new Date() > new Date(session.expires_at)) {
+      this.sessions = this.sessions.filter(s => s.token !== token);
+      this.saveToDisk();
+      return null;
+    }
+
+    const user = this.users.find(u => u.id === session.user_id && u.is_active);
+    if (!user) return null;
+
+    return { user, organization_id: session.organization_id };
+  }
+
+  revokeSessionToken(token: string): boolean {
+    const initialLen = this.sessions.length;
+    this.sessions = this.sessions.filter(s => s.token !== token);
+    this.saveToDisk();
+    return this.sessions.length < initialLen;
+  }
+
+  generatePasswordResetToken(userId: string): string {
+    const token = `rst_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
+    this.passwordResetTokens.set(token, { user_id: userId, expires_at: new Date(Date.now() + 3600000) });
+    return token;
+  }
+
+  getAIProviderConfigs(orgId: string): AIProviderConfig[] {
+    return this.aiProviders.filter(a => a.organization_id === orgId);
+  }
+
+  getRawAIProviderKey(providerId: string): string {
+    const raw = rawApiKeysStore.get(providerId);
+    if (raw) return decryptApiKey(raw);
+    return '';
   }
 
   createApiKey(orgId: string, data: {

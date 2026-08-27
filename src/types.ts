@@ -214,6 +214,7 @@ export interface User {
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';
   is_active?: boolean;
+  password_hash?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -382,10 +383,14 @@ export interface ExpenseRecord {
   idempotency_key?: string;
   organization_id: string;
   company_id: string;
+  company_name?: string;
   branch_id: string;
+  branch_name?: string;
   created_by_user_id: string;
   created_by_name: string;
+  created_by_user_name?: string;
   date: string;
+  expense_date?: string;
   supplier_name: string;
   supplier_rnc: string;
   supplier_id?: string;
@@ -577,3 +582,15 @@ export interface DGII606Record {
   tipo_retencion_isr: string;
   forma_pago: string;
 }
+
+export interface EmailSettings {
+  organization_id?: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  smtp_user: string;
+  encrypted_pass?: string;
+  smtp_from: string;
+  smtp_from_name: string;
+}
+

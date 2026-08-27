@@ -721,6 +721,16 @@ $report = json_decode(curl_exec($ch), true);
 
           <div className="flex flex-wrap items-center gap-3">
             <a
+              href="https://codemorf.tech/chat/docs/es/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-blue-600/20"
+              title="Documentación Oficial CodeMorf Tech"
+            >
+              <ExternalLink className="w-4 h-4" />
+              Documentación CodeMorf
+            </a>
+            <a
               href="/docs/openapi.yaml"
               download="openapi.yaml"
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-sm font-medium rounded-xl transition-all shadow-sm"
