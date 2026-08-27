@@ -37,7 +37,7 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
       }
     });
 
-    expect(regRes.status()).toBe(200);
+    expect(regRes.status()).toBe(201);
     const regData = await regRes.json();
     expect(regData.user).toBeDefined();
     expect(regData.organization).toBeDefined();
@@ -46,7 +46,7 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
     const platformRes = await request.get('/api/platform/tenants');
     expect(platformRes.status()).toBe(403);
 
-    // Create an expense
+    // Create an expense (HTTP 201 Created)
     const expRes = await request.post('/api/expenses', {
       data: {
         supplier_name: 'Total Energies Dominicana',
@@ -64,7 +64,19 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
         date: new Date().toISOString().split('T')[0]
       }
     });
-    expect(expRes.status()).toBe(200);
+    expect(expRes.status()).toBe(201);
+    const createdExpense = await expRes.json();
+    expect(createdExpense.id).toBeDefined();
+    expect(createdExpense.ncf).toBe('B0100000001');
+
+    // Query database persistence via GET /api/expenses
+    const listRes = await request.get('/api/expenses');
+    expect(listRes.status()).toBe(200);
+    const expensesList = await listRes.json();
+    expect(Array.isArray(expensesList)).toBe(true);
+    const found = expensesList.find((e: any) => e.ncf === 'B0100000001');
+    expect(found).toBeDefined();
+    expect(found.total_amount).toBe(2500);
 
     // Authenticated PDF export returns HTTP 200 with application/pdf
     const currentMonth = new Date().toISOString().substring(0, 7);

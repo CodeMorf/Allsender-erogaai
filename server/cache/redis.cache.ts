@@ -135,10 +135,14 @@ export class RedisCacheService implements CacheService {
   }
 
   async unlock(key: string): Promise<void> {
-    if (!this.redis) return this.fallbackMemory.unlock(key);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.unlock(key);
+    }
     try {
       await this.redis.del(`lock:${key}`);
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       await this.fallbackMemory.unlock(key);
     }
   }

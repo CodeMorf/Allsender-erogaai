@@ -1715,6 +1715,9 @@ export class ErogaAIDatabase {
       });
 
       this.triggerWebhooks(orgId, 'expense.created', newExpense);
+      prismaRepo.saveExpense(orgId, newExpense).catch((err) => {
+        if (process.env.NODE_ENV === 'production') console.error('[ErogaAI DB] Error persisting expense to SQL:', err);
+      });
 
       return newExpense;
     }

@@ -65,5 +65,6 @@ jobs:
         env:
           PORT: 3000
           NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
           JWT_SECRET: test_ci_secret_32_characters_long_1234
           ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

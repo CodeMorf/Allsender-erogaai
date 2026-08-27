@@ -195,6 +195,87 @@ export class PrismaRepository {
     }));
   }
 
+  async saveExpense(orgId: string, data: Partial<ExpenseRecord>): Promise<ExpenseRecord> {
+    const id = data.id || `exp_${Date.now()}`;
+    const saved = await this.prisma.expense.upsert({
+      where: { id },
+      update: {
+        company_id: data.company_id || 'comp_main',
+        branch_id: data.branch_id || 'branch_main',
+        created_by_user_id: data.created_by_user_id || 'usr_admin',
+        created_by_name: data.created_by_name || 'Admin',
+        expense_date: data.expense_date || data.date || new Date().toISOString().split('T')[0],
+        supplier_name: data.supplier_name || 'Proveedor',
+        supplier_rnc: data.supplier_rnc || '',
+        ncf: data.ncf || '',
+        ncf_type: data.ncf_type || 'B01',
+        document_type: data.document_type || 'FACTURA_CREDITO_FISCAL',
+        classification: data.classification || 'GASTO_OPERATIVO',
+        expense_category: data.expense_category || 'General',
+        subtotal: Number(data.subtotal) || 0,
+        itbis_amount: Number(data.itbis_amount) || 0,
+        total_amount: Number(data.total_amount) || 0,
+        currency: data.currency || 'DOP',
+        payment_method: data.payment_method || 'TARJETA_EMPRESARIAL',
+        status: data.status || 'PENDIENTE_REVISION'
+      },
+      create: {
+        id,
+        organization_id: orgId,
+        company_id: data.company_id || 'comp_main',
+        branch_id: data.branch_id || 'branch_main',
+        created_by_user_id: data.created_by_user_id || 'usr_admin',
+        created_by_name: data.created_by_name || 'Admin',
+        expense_date: data.expense_date || data.date || new Date().toISOString().split('T')[0],
+        supplier_name: data.supplier_name || 'Proveedor',
+        supplier_rnc: data.supplier_rnc || '',
+        ncf: data.ncf || '',
+        ncf_type: data.ncf_type || 'B01',
+        document_type: data.document_type || 'FACTURA_CREDITO_FISCAL',
+        classification: data.classification || 'GASTO_OPERATIVO',
+        expense_category: data.expense_category || 'General',
+        subtotal: Number(data.subtotal) || 0,
+        itbis_amount: Number(data.itbis_amount) || 0,
+        total_amount: Number(data.total_amount) || 0,
+        currency: data.currency || 'DOP',
+        payment_method: data.payment_method || 'TARJETA_EMPRESARIAL',
+        status: data.status || 'PENDIENTE_REVISION'
+      }
+    });
+
+    return {
+      id: saved.id,
+      organization_id: saved.organization_id,
+      company_id: saved.company_id,
+      branch_id: saved.branch_id,
+      created_by_user_id: saved.created_by_user_id,
+      created_by_name: saved.created_by_name,
+      date: saved.expense_date,
+      expense_date: saved.expense_date,
+      supplier_name: saved.supplier_name,
+      supplier_rnc: saved.supplier_rnc,
+      ncf: saved.ncf,
+      ncf_type: saved.ncf_type as any,
+      document_type: saved.document_type as any,
+      classification: saved.classification as any,
+      expense_category: saved.expense_category,
+      subtotal: saved.subtotal,
+      itbis_amount: saved.itbis_amount,
+      legal_tip_amount: saved.legal_tip_amount,
+      other_taxes: saved.other_taxes,
+      total_amount: saved.total_amount,
+      currency: saved.currency as any,
+      payment_method: saved.payment_method as any,
+      status: saved.status as any,
+      ai_confidence_score: saved.ai_confidence_score,
+      ai_provider_used: saved.ai_provider_used as any,
+      ai_model_used: saved.ai_model_used,
+      line_items: [],
+      created_at: saved.created_at.toISOString(),
+      updated_at: saved.updated_at.toISOString()
+    };
+  }
+
   get client(): PrismaClient {
     return this.prisma;
   }

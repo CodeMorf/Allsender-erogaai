@@ -20,5 +20,8 @@ export default defineConfig({
     url: 'http://127.0.0.1:3000/api/health',
     reuseExistingServer: true,
     timeout: 30000,
+    env: {
+      ...process.env,
+    },
   },
 });
