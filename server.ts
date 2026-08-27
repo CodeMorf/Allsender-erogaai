@@ -35,13 +35,34 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  const isProd = process.env.NODE_ENV === 'production';
+  const allowedOrigins = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) 
+    : (isProd ? ['https://erogaai.codemorf.tech', 'https://app.erogaai.com'] : true);
+
   // Security Headers & CORS
   app.use(helmet({
-    contentSecurityPolicy: false, // Vite inline client scripts in dev
+    contentSecurityPolicy: isProd ? {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https://images.unsplash.com"],
+        connectSrc: ["'self'", "https:", "http:"]
+      }
+    } : false,
     crossOriginEmbedderPolicy: false
   }));
+
   app.use(cors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins === true) return callback(null, true);
+      if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true
   }));
 

@@ -228,6 +228,69 @@ export class PrismaRepository {
     }));
   }
 
+  async saveCompany(orgId: string, data: Partial<Company>): Promise<Company> {
+    const id = data.id || `comp_${Date.now()}`;
+    const saved = await this.prisma.company.upsert({
+      where: { id },
+      update: {
+        name: data.name,
+        trade_name: data.trade_name,
+        rnc: data.rnc,
+        tax_regime: data.tax_regime,
+        address: data.address,
+        province: data.province,
+        municipality: data.municipality,
+        sector: data.sector,
+        phone: data.phone,
+        email: data.email,
+        is_main: data.is_main,
+        status: data.status,
+        is_active: data.is_active
+      },
+      create: {
+        id,
+        organization_id: orgId,
+        name: data.name || 'Empresa Filial',
+        trade_name: data.trade_name,
+        rnc: data.rnc || '000000000',
+        tax_regime: data.tax_regime || 'REGIMEN_GENERAL',
+        address: data.address || 'Santo Domingo, D.N.',
+        province: data.province || 'Distrito Nacional',
+        municipality: data.municipality || 'Santo Domingo de Guzmán',
+        sector: data.sector,
+        phone: data.phone,
+        email: data.email,
+        is_main: data.is_main ?? false,
+        status: data.status || 'ACTIVO',
+        is_active: data.is_active ?? true
+      }
+    });
+
+    return {
+      id: saved.id,
+      organization_id: saved.organization_id,
+      name: saved.name,
+      trade_name: saved.trade_name || undefined,
+      rnc: saved.rnc,
+      tax_regime: saved.tax_regime as any,
+      address: saved.address,
+      province: saved.province,
+      municipality: saved.municipality,
+      sector: saved.sector || undefined,
+      phone: saved.phone || undefined,
+      email: saved.email || undefined,
+      id_type: (saved.id_type || 'RNC') as any,
+      timezone: saved.timezone || 'America/Santo_Domingo',
+      currency: saved.currency as any,
+      country: saved.country,
+      is_main: saved.is_main,
+      status: saved.status as any,
+      is_active: saved.is_active,
+      created_at: saved.created_at.toISOString(),
+      updated_at: saved.updated_at.toISOString()
+    };
+  }
+
   // ----------------------------------------------------
   // Audit Logs (Immutable Append-Only)
   // ----------------------------------------------------

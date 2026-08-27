@@ -45,17 +45,24 @@ export class RedisCacheService implements CacheService {
   }
 
   async get<T>(key: string): Promise<T | null> {
-    if (!this.redis) return this.fallbackMemory.get<T>(key);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.get<T>(key);
+    }
     try {
       const val = await this.redis.get(key);
       return val ? JSON.parse(val) : null;
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       return this.fallbackMemory.get<T>(key);
     }
   }
 
   async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
-    if (!this.redis) return this.fallbackMemory.set<T>(key, value, ttlSeconds);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.set<T>(key, value, ttlSeconds);
+    }
     try {
       const str = JSON.stringify(value);
       if (ttlSeconds) {
@@ -63,49 +70,66 @@ export class RedisCacheService implements CacheService {
       } else {
         await this.redis.set(key, str);
       }
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       await this.fallbackMemory.set<T>(key, value, ttlSeconds);
     }
   }
 
   async del(key: string): Promise<void> {
-    if (!this.redis) return this.fallbackMemory.del(key);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.del(key);
+    }
     try {
       await this.redis.del(key);
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       await this.fallbackMemory.del(key);
     }
   }
 
   async exists(key: string): Promise<boolean> {
-    if (!this.redis) return this.fallbackMemory.exists(key);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.exists(key);
+    }
     try {
       const res = await this.redis.exists(key);
       return res === 1;
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       return this.fallbackMemory.exists(key);
     }
   }
 
   async increment(key: string, ttlSeconds = 60): Promise<number> {
-    if (!this.redis) return this.fallbackMemory.increment(key, ttlSeconds);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.increment(key, ttlSeconds);
+    }
     try {
       const val = await this.redis.incr(key);
       if (val === 1 && ttlSeconds) {
         await this.redis.expire(key, ttlSeconds);
       }
       return val;
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       return this.fallbackMemory.increment(key, ttlSeconds);
     }
   }
 
   async lock(key: string, ttlSeconds = 30): Promise<boolean> {
-    if (!this.redis) return this.fallbackMemory.lock(key, ttlSeconds);
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return this.fallbackMemory.lock(key, ttlSeconds);
+    }
     try {
       const res = await this.redis.set(`lock:${key}`, 'locked', 'EX', ttlSeconds, 'NX');
       return res === 'OK';
-    } catch {
+    } catch (err) {
+      if (process.env.REDIS_REQUIRED === 'true') throw err;
       return this.fallbackMemory.lock(key, ttlSeconds);
     }
   }

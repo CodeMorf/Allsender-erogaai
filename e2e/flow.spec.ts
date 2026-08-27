@@ -1,81 +1,96 @@
 import { test, expect } from '@playwright/test';
 
-const BASE_URL = 'http://localhost:3000';
-
 test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
   test('unauthenticated users are redirected to login view', async ({ page }) => {
-    await page.goto(`${BASE_URL}/company/dashboard`);
+    await page.goto('/company/dashboard');
     await expect(page.locator('body')).toBeVisible();
     const hasAuthText = await page.textContent('body');
     expect(hasAuthText).toMatch(/ErogaAI|Iniciar Sesión|Registrar/i);
   });
 
   test('protected API routes reject unauthenticated requests with HTTP 401', async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/users`);
+    const res = await request.get('/api/users');
     expect(res.status()).toBe(401);
   });
 
   test('platform routes reject unauthenticated requests with HTTP 401', async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/platform/tenants`);
+    const res = await request.get('/api/platform/tenants');
     expect(res.status()).toBe(401);
   });
 
   test('health endpoint is publicly accessible', async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/health`);
+    const res = await request.get('/api/health');
     expect(res.status()).toBe(200);
     const json = await res.json();
     expect(json.status).toBe('ok');
   });
 
-  test('user registration, tenant creation, and isolated session generation', async ({ request }) => {
+  test('tenant registration, expense creation, and authenticated report export', async ({ request }) => {
     const randomEmail = `tenant_${Date.now()}@example.com`;
-    const res = await request.post(`${BASE_URL}/api/auth/register`, {
+    const regRes = await request.post('/api/auth/register', {
       data: {
         email: randomEmail,
-        password: 'Password123!',
+        password: 'Password1234!',
         name: 'Inquilino E2E',
         company_name: 'Empresa E2E Dominicana SAS',
         rnc: '131-99882-1'
       }
     });
 
-    expect([200, 201]).toContain(res.status());
-    const data = await res.json();
-    expect(data.user).toBeDefined();
-    expect(data.user.email).toBe(randomEmail);
-    expect(data.organization).toBeDefined();
-    expect(data.organization.name).toBe('Empresa E2E Dominicana SAS');
+    expect(regRes.status()).toBe(200);
+    const regData = await regRes.json();
+    expect(regData.user).toBeDefined();
+    expect(regData.organization).toBeDefined();
+
+    // Tenant ADMIN cannot access platform superadmin endpoints (HTTP 403)
+    const platformRes = await request.get('/api/platform/tenants');
+    expect(platformRes.status()).toBe(403);
+
+    // Create an expense
+    const expRes = await request.post('/api/expenses', {
+      data: {
+        supplier_name: 'Total Energies Dominicana',
+        supplier_rnc: '101-00123-4',
+        ncf: 'B0100000001',
+        ncf_type: 'B01',
+        document_type: 'FACTURA_CREDITO_FISCAL',
+        classification: 'GASTO_OPERATIVO',
+        expense_category: 'Combustible',
+        subtotal: 2500,
+        itbis_amount: 0,
+        total_amount: 2500,
+        currency: 'DOP',
+        payment_method: 'TARJETA_EMPRESARIAL',
+        date: new Date().toISOString().split('T')[0]
+      }
+    });
+    expect(expRes.status()).toBe(200);
+
+    // Authenticated PDF export returns HTTP 200 with application/pdf
+    const currentMonth = new Date().toISOString().substring(0, 7);
+    const pdfRes = await request.get(`/api/reports/dgii-606/pdf?period=${currentMonth}`);
+    expect(pdfRes.status()).toBe(200);
+    const contentType = pdfRes.headers()['content-type'] || '';
+    expect(contentType).toContain('pdf');
+
+    // Authenticated Excel export returns HTTP 200
+    const xlsxRes = await request.get(`/api/reports/dgii-606/excel?period=${currentMonth}`);
+    expect(xlsxRes.status()).toBe(200);
   });
 
-  test('password reset request and token consumption flow', async ({ request }) => {
-    const forgotRes = await request.post(`${BASE_URL}/api/auth/forgot-password`, {
+  test('password reset request and token validation', async ({ request }) => {
+    const forgotRes = await request.post('/api/auth/forgot-password', {
       data: { email: 'it@codemorf.tech' }
     });
     expect(forgotRes.status()).toBe(200);
 
     // Invalid reset token is rejected
-    const invalidReset = await request.post(`${BASE_URL}/api/auth/reset-password`, {
+    const invalidReset = await request.post('/api/auth/reset-password', {
       data: {
         token: 'invalid_token_xyz',
         new_password: 'NewSecurePassword123!'
       }
     });
     expect(invalidReset.status()).toBe(400);
-  });
-
-  test('DGII 606 PDF and Excel generation endpoints are mounted and functional', async ({ request }) => {
-    const loginRes = await request.post(`${BASE_URL}/api/auth/login`, {
-      data: {
-        email: 'it@codemorf.tech',
-        password: 'Password123!' // will check with test fallback
-      }
-    });
-
-    // Verify reports endpoints respond without 404
-    const pdfRes = await request.get(`${BASE_URL}/api/reports/dgii-606/pdf?period=2026-08`);
-    expect([200, 401]).toContain(pdfRes.status());
-
-    const xlsxRes = await request.get(`${BASE_URL}/api/reports/dgii-606/excel?period=2026-08`);
-    expect([200, 401]).toContain(xlsxRes.status());
   });
 });

@@ -10,6 +10,21 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: erogaai_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -28,6 +43,11 @@ jobs:
           npx prisma generate
           npm run db:postgres:generate
 
+      - name: Validate PostgreSQL Database Schema & Push
+        run: npm run db:postgres:push
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
+
       - name: TypeScript Linting Check
         run: npm run lint
 
@@ -41,10 +61,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E Integration Suite
-        run: |
-          node dist/server.cjs &
-          npx wait-on http://127.0.0.1:3000/api/health
-          npx playwright test
+        run: npx playwright test
         env:
           PORT: 3000
           NODE_ENV: test

@@ -158,6 +158,9 @@ export interface AuditLog {
   entity_type: 'EXPENSE' | 'SETTINGS' | 'USER' | 'REPORT' | 'SUPPLIER' | 'PROJECT' | 'VEHICLE' | 'COMPANY' | 'BRANCH' | 'API_KEY' | 'ROLE' | 'ORGANIZATION';
   entity_id: string;
   details: string;
+  ip_address?: string;
+  user_agent?: string;
+  request_id?: string;
   created_at: string;
 }
 

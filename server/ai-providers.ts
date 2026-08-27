@@ -519,25 +519,32 @@ export class CodeMorfAIProvider implements AIProvider {
     try {
       if (this.apiUrl && this.apiUrl.startsWith('http')) {
         const res = await fetch(`${this.apiUrl}/health`, {
-          headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}
-        }).catch(() => null);
-        if (res && res.ok) {
+          headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {},
+          signal: AbortSignal.timeout(5000)
+        });
+        if (res.ok) {
           return {
             status: 'ONLINE',
             message: `Gateway CodeMorf Cloud Activo (${this.model})`,
             latency_ms: Date.now() - startTime
           };
+        } else {
+          return {
+            status: 'OFFLINE',
+            message: `Gateway CodeMorf Cloud respondió con error HTTP ${res.status}`,
+            latency_ms: Date.now() - startTime
+          };
         }
       }
       return {
-        status: 'ONLINE',
-        message: 'Motor Administrado CodeMorf Cloud Activo (Tokens Incluidos en el Plan SaaS)',
+        status: 'OFFLINE',
+        message: 'URL de Gateway CodeMorf Cloud no configurada (CODEMORF_API_URL)',
         latency_ms: Date.now() - startTime
       };
-    } catch {
+    } catch (err: any) {
       return {
-        status: 'ONLINE',
-        message: 'Motor Administrado CodeMorf Cloud Activo (Fallback Local Activo)',
+        status: 'OFFLINE',
+        message: `Fallo de conexión con Gateway CodeMorf Cloud: ${err.message}`,
         latency_ms: Date.now() - startTime
       };
     }
