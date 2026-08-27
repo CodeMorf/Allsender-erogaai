@@ -24,7 +24,8 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({ onComplete }) =>
   const [ncfSeries, setNcfSeries] = useState('B01');
 
   // Step 4 State: AI Key BYOK
-  const [aiProviderType, setAiProviderType] = useState<'GEMINI' | 'GROQ' | 'OPENAI'>('GEMINI');
+  const [aiProviderType, setAiProviderType] = useState<'CODEMORF' | 'GEMINI' | 'GROQ' | 'OPENAI'>('CODEMORF');
+  const [aiTokenMode, setAiTokenMode] = useState<'MANAGED' | 'BYOK'>('MANAGED');
   const [aiApiKey, setAiApiKey] = useState('');
 
   // Step 5 State: Team Invite
@@ -203,12 +204,50 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({ onComplete }) =>
                 <Cpu className="w-6 h-6" />
               </div>
               <div>
-                <h2 className="text-lg font-black text-white">Paso 4: Proveedor de Inteligencia Artificial</h2>
-                <p className="text-xs text-slate-400">Introduce tu API Key (BYOK) para habilitar el OCR de comprobantes con IA.</p>
+                <h2 className="text-lg font-black text-white">Paso 4: Motor de Inteligencia Artificial (Opcional)</h2>
+                <p className="text-xs text-slate-400">Selecciona si deseas usar los tokens administrados e incluidos en tu plan o tu propia clave API (BYOK).</p>
               </div>
             </div>
 
-            <div className="space-y-3 pt-2">
+            {/* Token Mode Selection */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAiTokenMode('MANAGED');
+                  setAiProviderType('CODEMORF');
+                }}
+                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                  aiTokenMode === 'MANAGED'
+                    ? 'bg-purple-950/60 border-purple-500/80 ring-2 ring-purple-500/30'
+                    : 'bg-slate-800/60 border-slate-700/60 hover:bg-slate-800'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-white">Tokens Incluidos en el Plan</span>
+                  <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-400 border border-emerald-700/60">Recomendado</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Usa el motor administrado CodeMorf Cloud AI sin necesidad de ingresar ninguna API Key.</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAiTokenMode('BYOK')}
+                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                  aiTokenMode === 'BYOK'
+                    ? 'bg-purple-950/60 border-purple-500/80 ring-2 ring-purple-500/30'
+                    : 'bg-slate-800/60 border-slate-700/60 hover:bg-slate-800'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-white">Bring Your Own Key (BYOK)</span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">Clave Propia</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Conecta tus propias claves privadas de Google Gemini, Groq u OpenAI.</p>
+              </button>
+            </div>
+
+            <div className="space-y-3 pt-1">
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">Motor de IA Preferido</label>
                 <select
@@ -216,23 +255,29 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({ onComplete }) =>
                   onChange={(e: any) => setAiProviderType(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none"
                 >
-                  <option value="GEMINI">Google Gemini Vision (Recomendado)</option>
+                  <option value="CODEMORF">CodeMorf Cloud AI (Incluido en el Plan SaaS — Recomendado)</option>
+                  <option value="GEMINI">Google Gemini Vision (BYOK)</option>
                   <option value="GROQ">Groq Llama 3.3 (Ultra-Low Latency)</option>
                   <option value="OPENAI">OpenAI GPT-4o (Alta Precisión)</option>
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">API Key Cifrada (BYOK)</label>
-                <input
-                  type="password"
-                  value={aiApiKey}
-                  onChange={(e) => setAiApiKey(e.target.value)}
-                  placeholder="Introducir API Key..."
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">La clave se almacenará encriptada con cifrado AES-256-GCM.</p>
-              </div>
+              {aiTokenMode === 'BYOK' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-300">API Key Cifrada (BYOK)</label>
+                    <span className="text-[10px] text-blue-400 font-bold">Opcional</span>
+                  </div>
+                  <input
+                    type="password"
+                    value={aiApiKey}
+                    onChange={(e) => setAiApiKey(e.target.value)}
+                    placeholder="Opcional: Introducir API Key propia..."
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">La clave se almacenará encriptada con cifrado AES-256-GCM en la base de datos de tu organización.</p>
+                </div>
+              )}
             </div>
           </div>
         )}
