@@ -125,6 +125,7 @@ export interface AuditLog {
   organization_id: string;
   user_id: string;
   user_name: string;
+  impersonated_by?: string;
   action: 
     | 'CREAR_GASTO' 
     | 'ACTUALIZAR_GASTO' 
@@ -150,8 +151,10 @@ export interface AuditLog {
     | 'ACTUALIZAR_ROL'
     | 'ELIMINAR_ROL'
     | 'ACTUALIZAR_MATRIZ_RBAC'
-    | 'RESET_MATRIZ_RBAC';
-  entity_type: 'EXPENSE' | 'SETTINGS' | 'USER' | 'REPORT' | 'SUPPLIER' | 'PROJECT' | 'VEHICLE' | 'COMPANY' | 'BRANCH' | 'API_KEY' | 'ROLE';
+    | 'RESET_MATRIZ_RBAC'
+    | 'IMPERSONATE_ORGANIZATION'
+    | 'PLATFORM_SETTINGS';
+  entity_type: 'EXPENSE' | 'SETTINGS' | 'USER' | 'REPORT' | 'SUPPLIER' | 'PROJECT' | 'VEHICLE' | 'COMPANY' | 'BRANCH' | 'API_KEY' | 'ROLE' | 'ORGANIZATION';
   entity_id: string;
   details: string;
   created_at: string;
@@ -210,6 +213,7 @@ export interface User {
   name: string;
   avatar?: string;
   role: RoleType | string;
+  platform_role?: 'SUPER_ADMIN' | 'PLATFORM_ADMIN' | 'SUPPORT' | 'BILLING_ADMIN' | 'NONE';
   organization_id: string;
   department?: string;
   status: 'ACTIVE' | 'INACTIVE';

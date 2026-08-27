@@ -51,6 +51,7 @@ interface AppContextType {
   currentBranch: Branch | null;
   setCurrentCompany: (c: Company | null) => void;
   setCurrentBranch: (b: Branch | null) => void;
+  fetchSession: () => Promise<void>;
   fetchCompanies: () => Promise<void>;
   saveCompany: (comp: Partial<Company>) => Promise<{ company?: Company; error?: string }>;
   deactivateCompany: (companyId: string) => Promise<boolean>;
@@ -1357,6 +1358,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentBranch,
         setCurrentCompany,
         setCurrentBranch,
+        fetchSession,
         fetchCompanies,
         saveCompany,
         deactivateCompany,
