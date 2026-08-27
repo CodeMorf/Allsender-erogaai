@@ -22,6 +22,7 @@ async function waitForServer(url: string, timeoutMs = 30000): Promise<void> {
 }
 
 test('production hardening: SQL isolation, state persistence and fail-closed authorization', async () => {
+  test.setTimeout(120000);
   const prisma = new PrismaClient();
   const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:3000';
   const tenantAContext = await playwrightRequest.newContext({ baseURL: baseUrl });

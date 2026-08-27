@@ -26,13 +26,22 @@ export class RedisCacheService implements CacheService {
           maxRetriesPerRequest: 1,
           lazyConnect: true
         });
-        this.connectPromise = this.redis.connect().then(() => undefined).catch((err: any) => {
+        const connectionAttempt = this.redis.connect().then(() => undefined).catch((err: any) => {
           if (!isRequired) {
             console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
             this.redis = null;
           }
           throw new Error(`REDIS_CONNECTION_FAILED: ${err.message}`);
         });
+        // A non-required cache must not delay application startup while a
+        // missing Redis endpoint retries in the background. Required Redis
+        // keeps the unbounded/strict failure path below.
+        this.connectPromise = isRequired
+          ? connectionAttempt
+          : Promise.race([
+              connectionAttempt,
+              new Promise<void>((_, reject) => setTimeout(() => reject(new Error('REDIS_CONNECTION_TIMEOUT')), 2000))
+            ]);
       } else if (isRequired) {
         throw new Error('REDIS_REQUIRED=true but ioredis driver is not available');
       }
