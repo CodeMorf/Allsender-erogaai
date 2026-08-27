@@ -282,8 +282,19 @@ export const Navbar: React.FC = () => {
 
               <div className="p-1">
                 <button
-                  onClick={() => setIsUserMenuOpen(false)}
-                  className="w-full text-left px-3 py-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2"
+                  onClick={async () => {
+                    setIsUserMenuOpen(false);
+                    try {
+                      await fetch('/api/auth/logout', { method: 'POST' });
+                    } catch (e) {
+                      console.warn('Logout error', e);
+                    } finally {
+                      localStorage.removeItem('eroga_impersonating_org_id');
+                      localStorage.removeItem('eroga_impersonating_org_name');
+                      window.location.href = '/';
+                    }
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-red-400 hover:text-red-300 hover:bg-red-950/40 flex items-center gap-2 font-bold cursor-pointer transition-colors"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Cerrar Sesión</span>

@@ -23,7 +23,8 @@ import {
   Sliders,
   Network,
   Truck,
-  Users
+  Users,
+  LogOut
 } from 'lucide-react';
 
 interface NavItem {
@@ -369,6 +370,23 @@ export const Sidebar: React.FC = () => {
               </span>
             </div>
           </div>
+          <button
+            onClick={async () => {
+              try {
+                await fetch('/api/auth/logout', { method: 'POST' });
+              } catch (e) {
+                console.warn('Logout error', e);
+              } finally {
+                localStorage.removeItem('eroga_impersonating_org_id');
+                localStorage.removeItem('eroga_impersonating_org_name');
+                window.location.href = '/';
+              }
+            }}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Cerrar Sesión"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
 
         <div className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] text-slate-400 flex items-center justify-between px-1">
