@@ -40,7 +40,7 @@ export const ExpenseScannerModal: React.FC = () => {
 
   const [step, setStep] = useState<'SELECT_MODE' | 'CAMERA_ACTIVE' | 'PROCESSING' | 'REVIEW_FORM'>('SELECT_MODE');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'samples' | 'upload' | 'camera'>('samples');
+  const [activeTab, setActiveTab] = useState<'upload' | 'camera'>('upload');
   
   // Camera state
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -130,17 +130,7 @@ export const ExpenseScannerModal: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleSampleSelect = (sampleType: 'gasolina' | 'computo' | 'restaurante' | 'supermercado') => {
-    let sampleImg = '';
-    if (sampleType === 'gasolina') sampleImg = 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600&auto=format&fit=crop&q=80';
-    if (sampleType === 'computo') sampleImg = 'https://images.unsplash.com/photo-1588872657578-7efd1f1555ed?w=600&auto=format&fit=crop&q=80';
-    if (sampleType === 'restaurante') sampleImg = 'https://images.unsplash.com/photo-1550966871-3ed3cdb5ed0c?w=600&auto=format&fit=crop&q=80';
-    if (sampleType === 'supermercado') sampleImg = 'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?w=600&auto=format&fit=crop&q=80';
-
-    processImageForOCR(sampleImg, sampleType);
-  };
-
-  const processImageForOCR = async (imageSrc: string, sampleType?: string) => {
+  const processImageForOCR = async (imageSrc: string) => {
     setSelectedImage(imageSrc);
     setStep('PROCESSING');
     setProcessingStatus('Inicializando motor de visión con IA...');
@@ -154,8 +144,7 @@ export const ExpenseScannerModal: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image_base64: imageSrc.startsWith('data:') ? imageSrc : undefined,
-          image_url: imageSrc.startsWith('http') ? imageSrc : undefined,
-          sample_type: sampleType
+          image_url: imageSrc.startsWith('http') ? imageSrc : undefined
         })
       });
 
@@ -306,35 +295,24 @@ export const ExpenseScannerModal: React.FC = () => {
               {/* Tabs */}
               <div className="flex border-b border-slate-200 dark:border-slate-800 gap-6">
                 <button
-                  onClick={() => setActiveTab('samples')}
-                  className={`pb-3 font-semibold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all ${
-                    activeTab === 'samples'
-                      ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
-                  }`}
-                >
-                  <Zap className="w-4 h-4 text-amber-500" />
-                  Tickets de Prueba Rápida (1 Clic)
-                </button>
-                <button
                   onClick={() => setActiveTab('upload')}
-                  className={`pb-3 font-semibold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all ${
+                  className={`pb-3 font-semibold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
                     activeTab === 'upload'
-                      ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                      ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                       : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
                   }`}
                 >
                   <Upload className="w-4 h-4" />
-                  Subir Imagen / PDF
+                  Subir Imagen / PDF / Foto
                 </button>
                 <button
                   onClick={() => {
                     setActiveTab('camera');
                     startCamera();
                   }}
-                  className={`pb-3 font-semibold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all ${
+                  className={`pb-3 font-semibold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
                     activeTab === 'camera'
-                      ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                      ? 'border-blue-600 text-blue-600 dark:text-blue-400 font-bold'
                       : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
                   }`}
                 >
@@ -342,104 +320,6 @@ export const ExpenseScannerModal: React.FC = () => {
                   Tomar Foto con Cámara
                 </button>
               </div>
-
-              {/* Sample Tickets Grid */}
-              {activeTab === 'samples' && (
-                <div className="space-y-3">
-                  <div className="p-3 bg-blue-50/70 dark:bg-blue-950/30 rounded-xl border border-blue-200 dark:border-blue-900/60 text-xs text-blue-800 dark:text-blue-300 flex items-center gap-2.5">
-                    <Sparkles className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <span>
-                      Prueba al instante la extracción OCR y clasificación con casos reales del sistema tributario dominicano (DGII):
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
-                    <button
-                      id="btn-sample-fuel"
-                      onClick={() => handleSampleSelect('gasolina')}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-blue-500 dark:hover:border-blue-500 transition-all text-left group shadow-xs hover:shadow-md cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-9 h-9 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-base">
-                          ⛽
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 group-hover:text-blue-600">
-                            Ticket Gasolina (Total Energies RD)
-                          </h4>
-                          <span className="text-[11px] text-blue-600 dark:text-blue-400 font-semibold">NCF B01 • Exento de ITBIS (Art. 343)</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Combustible RD$ 3,500.00. La IA reconoce la exención tributaria dominicana automáticamente.
-                      </p>
-                    </button>
-
-                    <button
-                      id="btn-sample-activo"
-                      onClick={() => handleSampleSelect('computo')}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-purple-500 dark:hover:border-purple-500 transition-all text-left group shadow-xs hover:shadow-md cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-9 h-9 rounded-lg bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold text-base">
-                          💻
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 group-hover:text-purple-600">
-                            Factura Laptop (CECOMSA Santo Domingo)
-                          </h4>
-                          <span className="text-[11px] text-purple-600 dark:text-purple-400 font-semibold">NCF B01 • Activo Fijo (Categoría 2 DGII)</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Laptop Dell RD$ 76,700.00 con ITBIS 18% (RD$ 11,700.00) y regla de activo depreciable.
-                      </p>
-                    </button>
-
-                    <button
-                      id="btn-sample-restaurant"
-                      onClick={() => handleSampleSelect('restaurante')}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-emerald-500 dark:hover:border-emerald-500 transition-all text-left group shadow-xs hover:shadow-md cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-9 h-9 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-base">
-                          🍽️
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 group-hover:text-emerald-600">
-                            Almuerzo Ejecutivo (Restaurante El Laurel)
-                          </h4>
-                          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">NCF B01 • ITBIS 18% + Propina Ley 10%</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Total RD$ 5,376.00 con desglose legal exacto de Propina de Ley (Ley 5432) e ITBIS.
-                      </p>
-                    </button>
-
-                    <button
-                      id="btn-sample-inventory"
-                      onClick={() => handleSampleSelect('supermercado')}
-                      className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 hover:border-amber-500 dark:hover:border-amber-500 transition-all text-left group shadow-xs hover:shadow-md cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-9 h-9 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-base">
-                          🛒
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 group-hover:text-amber-600">
-                            Supermercado (La Sirena Churchill)
-                          </h4>
-                          <span className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">e-CF E31 • Factura Electrónica DGII</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Insumos RD$ 9,735.00 con desglose de ítems (Café Santo Domingo, Papel Bond, Limpieza).
-                      </p>
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Upload Tab */}
               {activeTab === 'upload' && (
