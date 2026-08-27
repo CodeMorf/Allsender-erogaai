@@ -3,12 +3,12 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { cache } from './cache/index.ts';
 import { prismaRepo } from './database/prisma.repository.ts';
-import { db } from './db.ts';
 
 export interface AuthenticatedRequest extends Request {
   user_id?: string;
   organization_id?: string;
   user_role?: string;
+  platform_role?: string;
   user_name?: string;
   user_email?: string;
   request_id?: string;
@@ -44,7 +44,8 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
 
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
-      await cache.del(`session:${sessionToken}`);
+      const sessionHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+      await cache.del(`session:${sessionHash}`);
       return res.status(401).json({
         error: 'Sesión expirada o inválida. Por favor inicie sesión nuevamente.',
         code: 'SESSION_EXPIRED'
@@ -54,6 +55,7 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
     req.user_id = sessionData.user.id;
     req.organization_id = sessionData.user.organization_id;
     req.user_role = sessionData.user.role;
+    req.platform_role = sessionData.user.platform_role;
     req.user_name = sessionData.user.name;
     req.user_email = sessionData.user.email;
 
@@ -86,19 +88,24 @@ export function requirePermission(permissionKey: string) {
       return res.status(401).json({ error: 'No autenticado' });
     }
 
-    if (req.user_role === 'ADMIN') {
+    // Platform authorization is established from the SQL-backed session and
+    // remains valid while a platform administrator impersonates a tenant.
+    if (req.platform_role === 'SUPER_ADMIN' || req.platform_role === 'PLATFORM_ADMIN') {
       return next();
     }
 
-    const hasAccess = db.checkUserPermission(req.organization_id, req.user_role, permissionKey);
-    if (!hasAccess) {
-      return res.status(403).json({ 
-        error: `Acceso denegado: Se requiere el permiso '${permissionKey}'`, 
-        code: 'FORBIDDEN' 
-      });
-    }
-
-    next();
+    void prismaRepo.checkUserPermission(req.organization_id, req.user_id!, permissionKey)
+      .then(hasAccess => {
+        if (!hasAccess) {
+          res.status(403).json({
+            error: `Acceso denegado: Se requiere el permiso '${permissionKey}'`,
+            code: 'FORBIDDEN'
+          });
+          return;
+        }
+        next();
+      })
+      .catch(next);
   };
 }
 

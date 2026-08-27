@@ -36,6 +36,7 @@ model Organization {
   users               User[]
   memberships         Membership[]
   sessions            Session[]
+  roles               Role[]
   expenses            Expense[]
   categories          ExpenseCategory[]
   cost_centers        CostCenter[]
@@ -188,6 +189,7 @@ model PasswordResetToken {
 model Role {
   id              String   @id @default(uuid())
   organization_id String
+  code            String   @default("CUSTOM")
   name            String
   description     String
   is_system       Boolean  @default(false)
@@ -195,6 +197,10 @@ model Role {
   permissions     String // JSON array string
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@unique([organization_id, code])
 
   @@map("roles")
 }
@@ -243,6 +249,8 @@ model Expense {
   all_sender_synced_at    DateTime?
   erp_sync_status         String   @default("DESACTIVADO")
   erp_sync_error          String?
+  erp_synced_at           DateTime?
+  erp_response_payload    String?
   created_at              DateTime @default(now())
   updated_at              DateTime @updatedAt
 
@@ -364,9 +372,13 @@ model Receipt {
   image_url       String?
   file_name       String?
   mime_type       String?  @default("image/jpeg")
+  image_base64    String?
   extraction_json String?
+  fiscal_validation_json String?
+  meta_json       String?
   error           String?
   created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
 
   organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
 
@@ -403,6 +415,7 @@ model AIUsageLog {
   organization_id String
   provider_type   String
   model           String
+  expense_id      String?
   action          String
   tokens_prompt   Int      @default(0)
   tokens_completion Int    @default(0)
@@ -437,14 +450,15 @@ model ApiKey {
   organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
   company         Company      @relation(fields: [company_id], references: [id], onDelete: Cascade)
   branch          Branch?      @relation(fields: [branch_id], references: [id], onDelete: SetNull)
+  logs            ApiKeyLog[]
 
   @@map("api_keys")
 }
 
 model ApiKeyLog {
   id              String   @id @default(uuid())
-  api_key_id      String
-  organization_id String
+  api_key_id      String?
+  organization_id String?
   endpoint        String
   method          String
   status_code     Int
@@ -452,7 +466,8 @@ model ApiKeyLog {
   latency_ms      Int
   created_at      DateTime @default(now())
 
-  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  organization    Organization? @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  api_key         ApiKey? @relation(fields: [api_key_id], references: [id], onDelete: Cascade)
 
   @@map("api_key_logs")
 }

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import crypto from 'node:crypto';
 
 test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
   test('unauthenticated users are redirected to login view', async ({ page }) => {
@@ -28,10 +29,11 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
 
   test('tenant registration, expense creation, and authenticated report export', async ({ request }) => {
     const randomEmail = `tenant_${Date.now()}@example.com`;
+    const testPassword = `E2E_${crypto.randomBytes(24).toString('hex')}`;
     const regRes = await request.post('/api/auth/register', {
       data: {
         email: randomEmail,
-        password: 'Password1234!',
+        password: testPassword,
         name: 'Inquilino E2E',
         company_name: 'Empresa E2E Dominicana SAS',
         rnc: '131-99882-1'
@@ -128,7 +130,7 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
     const invalidReset = await request.post('/api/auth/reset-password', {
       data: {
         token: 'invalid_token_xyz',
-        new_password: 'NewSecurePassword123!'
+        new_password: `Reset_${crypto.randomBytes(24).toString('hex')}`
       }
     });
     expect(invalidReset.status()).toBe(400);

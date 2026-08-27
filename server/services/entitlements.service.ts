@@ -1,4 +1,4 @@
-import { db } from '../db.ts';
+import { prismaRepo } from '../database/prisma.repository.ts';
 
 export interface EntitlementLimits {
   max_users: number;
@@ -65,33 +65,33 @@ const PLAN_LIMITS: Record<string, EntitlementLimits> = {
 };
 
 export class EntitlementService {
-  static getLimitsForOrg(orgId: string): EntitlementLimits {
-    const org = db.getOrganizationById(orgId);
+  static async getLimitsForOrg(orgId: string): Promise<EntitlementLimits> {
+    const org = await prismaRepo.getOrganizationById(orgId);
     const plan = org?.plan || 'STARTER';
     return PLAN_LIMITS[plan] || PLAN_LIMITS.STARTER;
   }
 
-  static canCreateUser(orgId: string): boolean {
-    const limits = this.getLimitsForOrg(orgId);
-    const currentUsers = db.getUsers(orgId).length;
+  static async canCreateUser(orgId: string): Promise<boolean> {
+    const limits = await this.getLimitsForOrg(orgId);
+    const currentUsers = (await prismaRepo.getUsers(orgId)).length;
     return currentUsers < limits.max_users;
   }
 
-  static canCreateCompany(orgId: string): boolean {
-    const limits = this.getLimitsForOrg(orgId);
-    const currentCompanies = db.getCompanies(orgId).length;
+  static async canCreateCompany(orgId: string): Promise<boolean> {
+    const limits = await this.getLimitsForOrg(orgId);
+    const currentCompanies = (await prismaRepo.getCompanies(orgId)).length;
     return currentCompanies < limits.max_companies;
   }
 
-  static canCreateBranch(orgId: string, companyId?: string): boolean {
-    const limits = this.getLimitsForOrg(orgId);
-    const currentBranches = db.getBranches(orgId, companyId).length;
+  static async canCreateBranch(orgId: string, companyId?: string): Promise<boolean> {
+    const limits = await this.getLimitsForOrg(orgId);
+    const currentBranches = (await prismaRepo.getBranches(orgId, companyId)).length;
     return currentBranches < limits.max_branches;
   }
 
-  static canUseOCRScan(orgId: string): boolean {
-    const limits = this.getLimitsForOrg(orgId);
-    const org = db.getOrganizationById(orgId);
+  static async canUseOCRScan(orgId: string): Promise<boolean> {
+    const limits = await this.getLimitsForOrg(orgId);
+    const org = await prismaRepo.getOrganizationById(orgId);
     const used = org?.monthly_scans_used || 0;
     return used < limits.ocr_limit;
   }

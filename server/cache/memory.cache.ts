@@ -9,6 +9,10 @@ export class MemoryCacheService implements CacheService {
   private store: Map<string, CacheEntry> = new Map();
   private locks: Set<string> = new Set();
 
+  async ensureConnected(): Promise<void> {
+    return Promise.resolve();
+  }
+
   async get<T>(key: string): Promise<T | null> {
     const entry = this.store.get(key);
     if (!entry) return null;

@@ -5,6 +5,7 @@ import { MemoryCacheService } from './memory.cache.ts';
 export class RedisCacheService implements CacheService {
   private redis: any = null;
   private fallbackMemory: MemoryCacheService;
+  private connectPromise: Promise<void> | null = null;
 
   constructor(redisUrl?: string) {
     this.fallbackMemory = new MemoryCacheService();
@@ -25,13 +26,12 @@ export class RedisCacheService implements CacheService {
           maxRetriesPerRequest: 1,
           lazyConnect: true
         });
-        this.redis.connect().catch((err: any) => {
-          if (isRequired) {
-            console.error('FATAL: REDIS_REQUIRED=true but connection failed:', err.message);
-            throw new Error(`REDIS_CONNECTION_FAILED: ${err.message}`);
+        this.connectPromise = this.redis.connect().then(() => undefined).catch((err: any) => {
+          if (!isRequired) {
+            console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
+            this.redis = null;
           }
-          console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
-          this.redis = null;
+          throw new Error(`REDIS_CONNECTION_FAILED: ${err.message}`);
         });
       } else if (isRequired) {
         throw new Error('REDIS_REQUIRED=true but ioredis driver is not available');
@@ -44,7 +44,35 @@ export class RedisCacheService implements CacheService {
     }
   }
 
+  private async waitForConnection(): Promise<void> {
+    if (!this.connectPromise) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return;
+    }
+    try {
+      await this.connectPromise;
+    } catch (error) {
+      if (process.env.REDIS_REQUIRED === 'true') throw error;
+      this.redis = null;
+    }
+  }
+
+  async ensureConnected(): Promise<void> {
+    await this.waitForConnection();
+    if (!this.redis) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
+      return;
+    }
+    try {
+      await this.redis.ping();
+    } catch (error: any) {
+      if (process.env.REDIS_REQUIRED === 'true') throw new Error(`REDIS_CONNECTION_FAILED: ${error.message}`);
+      this.redis = null;
+    }
+  }
+
   async get<T>(key: string): Promise<T | null> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.get<T>(key);
@@ -59,6 +87,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.set<T>(key, value, ttlSeconds);
@@ -77,6 +106,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async del(key: string): Promise<void> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.del(key);
@@ -90,6 +120,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async exists(key: string): Promise<boolean> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.exists(key);
@@ -104,6 +135,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async increment(key: string, ttlSeconds = 60): Promise<number> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.increment(key, ttlSeconds);
@@ -121,6 +153,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async lock(key: string, ttlSeconds = 30): Promise<boolean> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.lock(key, ttlSeconds);
@@ -135,6 +168,7 @@ export class RedisCacheService implements CacheService {
   }
 
   async unlock(key: string): Promise<void> {
+    await this.waitForConnection();
     if (!this.redis) {
       if (process.env.REDIS_REQUIRED === 'true') throw new Error('REDIS_REQUIRED=true but Redis is not connected');
       return this.fallbackMemory.unlock(key);

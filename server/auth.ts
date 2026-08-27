@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { cache } from './cache/index.ts';
 import { AuthenticatedRequest } from './middleware.ts';
 import { sendEmail } from './mailer.ts';
@@ -161,7 +162,8 @@ export async function logoutHandler(req: AuthenticatedRequest, res: Response) {
     const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
   if (sessionToken) {
     await prismaRepo.revokeSessionToken(sessionToken);
-    await cache.del(`session:${sessionToken}`);
+    const sessionHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+    await cache.del(`session:${sessionHash}`);
   }
   res.clearCookie('eroga_session');
   res.clearCookie('eroga_impersonate_org');

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
+import { defaultRolesForOrg } from '../server/rbac.ts';
 
 const prisma = new PrismaClient();
 
@@ -59,6 +59,21 @@ async function main() {
       }
     });
     console.log(`[Seed] SuperAdmin ${superAdminEmail} already exists. Preserved existing password hash.`);
+  }
+
+  const seededUser = await prisma.user.findUnique({ where: { email: superAdminEmail } });
+  if (!seededUser) throw new Error('Seed could not resolve the SuperAdmin user.');
+  await prisma.membership.upsert({
+    where: { id: `membership_${seededUser.id}_${org.id}` },
+    update: { role: seededUser.role, status: 'ACTIVE', is_active: true },
+    create: { id: `membership_${seededUser.id}_${org.id}`, organization_id: org.id, user_id: seededUser.id, role: seededUser.role, status: 'ACTIVE', is_active: true }
+  });
+  for (const role of defaultRolesForOrg(org.id)) {
+    await prisma.role.upsert({
+      where: { id: role.id },
+      update: { code: role.code, name: role.name, description: role.description, color: role.color, is_system: true, permissions: JSON.stringify(role.permissions) },
+      create: { id: role.id, organization_id: org.id, code: role.code, name: role.name, description: role.description, color: role.color, is_system: true, permissions: JSON.stringify(role.permissions) }
+    });
   }
 
   // SQL is the only source of truth. The legacy data/db.json is intentionally not touched.

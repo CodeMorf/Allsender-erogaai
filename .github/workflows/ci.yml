@@ -10,14 +10,14 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
+      DATABASE_URL: postgresql://postgres@localhost:5432/erogaai_ci?schema=public
 
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: erogaai_ci
         ports:
           - 5432:5432
@@ -45,10 +45,15 @@ jobs:
           npx prisma generate
           npm run db:postgres:generate
 
-      - name: Validate PostgreSQL Database Schema & Push
-        run: npm run db:postgres:push
+      - name: Deploy versioned PostgreSQL migrations
+        run: npm run db:postgres:migrate
         env:
-          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
+          DATABASE_URL: postgresql://postgres@localhost:5432/erogaai_ci?schema=public
+
+      - name: Seed test database
+        run: |
+          export SUPERADMIN_INITIAL_PASSWORD="$(openssl rand -hex 32)"
+          npx tsx prisma/seed.ts
 
       - name: TypeScript Linting Check
         run: npm run lint
@@ -63,10 +68,12 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E Integration Suite
-        run: npx playwright test
+        run: |
+          export JWT_SECRET="$(openssl rand -hex 32)"
+          export EROGAAI_SECRET_KEY="$(openssl rand -hex 32)"
+          export ENCRYPTION_KEY="$EROGAAI_SECRET_KEY"
+          npx playwright test
         env:
           PORT: 3000
           NODE_ENV: test
-          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
-          JWT_SECRET: test_ci_secret_32_characters_long_1234
-          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DATABASE_URL: postgresql://postgres@localhost:5432/erogaai_ci?schema=public

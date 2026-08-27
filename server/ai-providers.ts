@@ -8,8 +8,7 @@ import {
   ExpenseClassification,
   NcfType
 } from '../src/types.ts';
-import { decryptApiKey } from './encryption.ts';
-import { db } from './db.ts';
+import { prismaRepo } from './database/prisma.repository.ts';
 
 export interface ReceiptImage {
   base64Data: string;
@@ -192,7 +191,7 @@ export class GeminiAIProvider implements AIProvider {
       const duration = Date.now() - startTime;
       const parsed = JSON.parse(response.text) as ReceiptExtraction;
 
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'GEMINI',
         model: this.model,
@@ -210,7 +209,7 @@ export class GeminiAIProvider implements AIProvider {
         currency: (parsed.currency as 'DOP' | 'USD' | 'EUR') || 'DOP'
       };
     } catch (error: any) {
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'GEMINI',
         model: this.model,
@@ -240,7 +239,7 @@ export class GeminiAIProvider implements AIProvider {
   }
 
   async getUsage(): Promise<AIUsage> {
-    const logs = db.getAIUsageLogs(this.orgId).filter(l => l.provider_type === 'GEMINI');
+    const logs = (await prismaRepo.getAIUsageLogs(this.orgId)).filter(l => l.provider_type === 'GEMINI');
     const total_requests = logs.length;
     const total_tokens = logs.reduce((acc, l) => acc + l.tokens_prompt + l.tokens_completion, 0);
     return {
@@ -325,7 +324,7 @@ export class GroqAIProvider implements AIProvider {
       const text = json.choices?.[0]?.message?.content || '{}';
       const parsed = JSON.parse(text) as ReceiptExtraction;
 
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'GROQ',
         model: this.model,
@@ -338,7 +337,7 @@ export class GroqAIProvider implements AIProvider {
 
       return parsed;
     } catch (error: any) {
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'GROQ',
         model: this.model,
@@ -367,7 +366,7 @@ export class GroqAIProvider implements AIProvider {
   }
 
   async getUsage(): Promise<AIUsage> {
-    const logs = db.getAIUsageLogs(this.orgId).filter(l => l.provider_type === 'GROQ');
+    const logs = (await prismaRepo.getAIUsageLogs(this.orgId)).filter(l => l.provider_type === 'GROQ');
     return {
       total_requests: logs.length,
       total_tokens: logs.reduce((a, b) => a + b.tokens_prompt + b.tokens_completion, 0),
@@ -445,7 +444,7 @@ export class OpenAIProvider implements AIProvider {
       const text = json.choices?.[0]?.message?.content || '{}';
       const parsed = JSON.parse(text) as ReceiptExtraction;
 
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'OPENAI',
         model: this.model,
@@ -458,7 +457,7 @@ export class OpenAIProvider implements AIProvider {
 
       return parsed;
     } catch (error: any) {
-      db.logAIUsage({
+      await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'OPENAI',
         model: this.model,
@@ -487,7 +486,7 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async getUsage(): Promise<AIUsage> {
-    const logs = db.getAIUsageLogs(this.orgId).filter(l => l.provider_type === 'OPENAI');
+    const logs = (await prismaRepo.getAIUsageLogs(this.orgId)).filter(l => l.provider_type === 'OPENAI');
     return {
       total_requests: logs.length,
       total_tokens: logs.reduce((a, b) => a + b.tokens_prompt + b.tokens_completion, 0),
@@ -571,7 +570,7 @@ export class CodeMorfAIProvider implements AIProvider {
         if (res.ok) {
           const data = await res.json();
           const ext: ReceiptExtraction = data.extraction || data;
-          db.logAIUsage({
+          await prismaRepo.logAIUsage({
             organization_id: this.orgId,
             provider_type: 'CODEMORF',
             model: this.model,
@@ -607,7 +606,7 @@ export class CodeMorfAIProvider implements AIProvider {
   }
 
   async getUsage(): Promise<AIUsage> {
-    const logs = db.getAIUsageLogs(this.orgId).filter(l => l.provider_type === 'CODEMORF');
+    const logs = (await prismaRepo.getAIUsageLogs(this.orgId)).filter(l => l.provider_type === 'CODEMORF');
     return {
       total_requests: logs.length,
       total_tokens: logs.reduce((a, b) => a + b.tokens_prompt + b.tokens_completion, 0),
@@ -620,8 +619,8 @@ export class CodeMorfAIProvider implements AIProvider {
 /**
  * Returns active AI Provider instance for organization or executes real fallback chain
  */
-export function getAIProviderInstance(orgId: string, preferredType?: AIProviderType): AIProvider {
-  const configs = db.getAIProviderConfigs(orgId);
+export async function getAIProviderInstance(orgId: string, preferredType?: AIProviderType): Promise<AIProvider> {
+  const configs = await prismaRepo.getAIProviderConfigs(orgId);
   const activeConfigs = configs.filter(c => c.is_active && c.has_key);
 
   const selected = (preferredType ? activeConfigs.find(c => c.provider_type === preferredType) : null)
@@ -633,7 +632,7 @@ export function getAIProviderInstance(orgId: string, preferredType?: AIProviderT
     return new CodeMorfAIProvider('', 'codemorf-vision-v1', orgId);
   }
 
-  const rawKey = db.getRawAIProviderKey(selected.id) || (selected.provider_type === 'GEMINI' ? process.env.GEMINI_API_KEY : '') || '';
+  const rawKey = await prismaRepo.getDecryptedAIProviderKey(orgId, selected.id) || (selected.provider_type === 'GEMINI' ? process.env.GEMINI_API_KEY : '') || '';
 
   switch (selected.provider_type) {
     case 'CODEMORF':
@@ -652,7 +651,7 @@ export function getAIProviderInstance(orgId: string, preferredType?: AIProviderT
  * Executes Receipt Extraction with Real Fallback Chain Across Active Providers
  */
 export async function extractWithFallback(orgId: string, image: ReceiptImage): Promise<{ extraction: ReceiptExtraction; providerUsed: AIProviderType; modelUsed: string }> {
-  const configs = db.getAIProviderConfigs(orgId).filter(c => c.is_active && c.has_key);
+  const configs = (await prismaRepo.getAIProviderConfigs(orgId)).filter(c => c.is_active && c.has_key);
 
   if (configs.length === 0) {
     // Attempt with environment Gemini Key
@@ -667,7 +666,7 @@ export async function extractWithFallback(orgId: string, image: ReceiptImage): P
 
   for (const cfg of sorted) {
     try {
-      const instance = getAIProviderInstance(orgId, cfg.provider_type);
+      const instance = await getAIProviderInstance(orgId, cfg.provider_type);
       const extraction = await instance.extractReceiptData(image);
       return { extraction, providerUsed: cfg.provider_type, modelUsed: cfg.selected_model };
     } catch (err: any) {

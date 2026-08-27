@@ -566,6 +566,10 @@ import { prismaRepo } from './database/prisma.repository.ts';
 
 const DB_FILE_PATH = path.join(process.cwd(), 'data', 'db.json');
 
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('LEGACY_JSON_DB_FORBIDDEN: server/db.ts solo puede usarse como herramienta de migración o fixture de pruebas.');
+}
+
 export class ErogaAIDatabase {
   private organizations: Organization[] = [...initialOrganizations];
   private users: User[] = [...initialUsers];

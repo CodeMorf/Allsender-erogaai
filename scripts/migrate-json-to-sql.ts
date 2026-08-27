@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -66,6 +68,10 @@ async function migrateJsonToSql() {
     if (Array.isArray(data.users)) {
       for (const usr of data.users) {
         try {
+          // Legacy records without a password must not receive a shared or
+          // guessable credential. Generate a random unusable-by-default hash
+          // so an administrator can issue a normal reset after migration.
+          const passwordHash = usr.password_hash || await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
           await prisma.user.upsert({
             where: { email: usr.email },
             update: {},
@@ -80,7 +86,7 @@ async function migrateJsonToSql() {
               department: usr.department || 'Operaciones',
               status: usr.status || 'ACTIVE',
               is_active: usr.is_active ?? true,
-              password_hash: usr.password_hash || '$2a$10$eWkZ.xY.e3R1Hh2g/6V.yO9p7a1234567890'
+              password_hash: passwordHash
             }
           });
           stats.users++;

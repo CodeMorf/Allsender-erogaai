@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { prismaRepo } from '../server/database/prisma.repository.ts';
 
 describe('Auth & Security Validation', () => {
   it('hashes passwords securely with bcrypt', async () => {
-    const rawPass = 'Secret123!';
+    const rawPass = `Test_${crypto.randomBytes(24).toString('hex')}`;
     const hashed = await bcrypt.hash(rawPass, 10);
     expect(hashed).not.toEqual(rawPass);
 
@@ -19,7 +20,7 @@ describe('Auth & Security Validation', () => {
       email: `test_${Date.now()}@example.com`,
       role: 'ADMIN',
       status: 'ACTIVE',
-      password_hash: await bcrypt.hash('Secret123!', 10)
+      password_hash: await bcrypt.hash(`Session_${crypto.randomBytes(24).toString('hex')}`, 10)
     });
 
     expect(userResult.user).toBeDefined();
