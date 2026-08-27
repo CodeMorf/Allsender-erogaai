@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
 
 test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
   test('unauthenticated users are redirected to login view', async ({ page }) => {
@@ -69,7 +70,34 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
     expect(createdExpense.id).toBeDefined();
     expect(createdExpense.ncf).toBe('B0100000001');
 
-    // Query database persistence via GET /api/expenses
+    // Verify the response came from a committed SQL row, not the process memory.
+    const prisma = new PrismaClient();
+    try {
+      const persisted = await prisma.expense.findUnique({ where: { id: createdExpense.id } });
+      expect(persisted).not.toBeNull();
+      expect(persisted?.organization_id).toBe(regData.organization.id);
+      expect(persisted?.ncf).toBe('B0100000001');
+      expect(persisted?.total_amount).toBe(2500);
+    } finally {
+      await prisma.$disconnect();
+    }
+
+    // Invalid SQL relations fail closed; the API must not return HTTP 201.
+    const invalidRelationRes = await request.post('/api/expenses', {
+      data: {
+        company_id: 'company_not_in_this_tenant',
+        branch_id: 'branch_not_in_this_tenant',
+        supplier_name: 'Debe fallar',
+        ncf: 'B0100000002',
+        subtotal: 1,
+        itbis_amount: 0,
+        total_amount: 1
+      }
+    });
+    expect(invalidRelationRes.status()).toBe(422);
+    expect((await invalidRelationRes.json()).code).toBe('EXPENSE_COMPANY_SCOPE_INVALID');
+
+    // Query persisted expenses through the authenticated API.
     const listRes = await request.get('/api/expenses');
     expect(listRes.status()).toBe(200);
     const expensesList = await listRes.json();

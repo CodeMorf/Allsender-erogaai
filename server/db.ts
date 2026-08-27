@@ -599,26 +599,6 @@ export class ErogaAIDatabase {
 
   constructor() {
     this.loadFromDisk();
-    this.syncWithPrisma().catch(() => {});
-  }
-
-  private async syncWithPrisma() {
-    try {
-      const orgs = await prismaRepo.getOrganizations();
-      if (orgs && orgs.length > 0) {
-        this.organizations = orgs;
-      }
-      for (const org of this.organizations) {
-        const uList = await prismaRepo.getUsers(org.id);
-        if (uList && uList.length > 0) {
-          uList.forEach(u => {
-            const idx = this.users.findIndex(x => x.id === u.id || x.email.toLowerCase() === u.email.toLowerCase());
-            if (idx >= 0) this.users[idx] = { ...this.users[idx], ...u };
-            else this.users.push(u);
-          });
-        }
-      }
-    } catch {}
   }
 
   private loadFromDisk() {
@@ -713,7 +693,6 @@ export class ErogaAIDatabase {
         ...orgData,
         updated_at: now
       };
-      prismaRepo.saveOrganization(this.organizations[existingIdx]).catch(() => {});
       return this.organizations[existingIdx];
     } else {
       const newOrg: Organization = {
@@ -729,7 +708,6 @@ export class ErogaAIDatabase {
         updated_at: now
       };
       this.organizations.push(newOrg);
-      prismaRepo.saveOrganization(newOrg).catch(() => {});
       return newOrg;
     }
   }
@@ -849,7 +827,6 @@ export class ErogaAIDatabase {
       });
     }
 
-    prismaRepo.saveCompany(orgId, targetCompany).catch(() => {});
     return { company: targetCompany };
   }
 
@@ -1715,10 +1692,6 @@ export class ErogaAIDatabase {
       });
 
       this.triggerWebhooks(orgId, 'expense.created', newExpense);
-      prismaRepo.saveExpense(orgId, newExpense).catch((err) => {
-        if (process.env.NODE_ENV === 'production') console.error('[ErogaAI DB] Error persisting expense to SQL:', err);
-      });
-
       return newExpense;
     }
   }
@@ -2109,7 +2082,9 @@ export class ErogaAIDatabase {
       ip_address: log.ip_address,
       user_agent: log.user_agent,
       request_id: log.request_id
-    }).catch(() => {});
+    }).catch((error) => {
+      console.error('[ErogaAI DB] Error persisting legacy audit event to SQL:', error);
+    });
     return newLog;
   }
 

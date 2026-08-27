@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, officialApiScopes } from './server/db.ts';
+import { prismaRepo, RepositoryError } from './server/database/prisma.repository.ts';
 import { 
   getAIProviderInstance, 
   extractWithFallback, 
@@ -31,9 +32,16 @@ import { generateExpensesXLSX } from './server/reports-excel.ts';
 import { syncExpensesToAllSenderERP } from './server/erp-client.ts';
 import { ExpenseRecord } from './src/types.ts';
 
+const asyncRoute = (
+  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>
+) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  void handler(req, res, next).catch(next);
+};
+
 async function startServer() {
+  await prismaRepo.ensureConnected();
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
   const isProd = process.env.NODE_ENV === 'production';
   const allowedOrigins = process.env.ALLOWED_ORIGINS 
@@ -93,13 +101,13 @@ async function startServer() {
   });
 
   // Session & Auth
-  app.get('/api/session', (req, res) => {
+  app.get('/api/session', asyncRoute(async (req, res) => {
     const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
       return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null, is_impersonating: false });
     }
 
-    const sessionData = db.validateSessionToken(token);
+    const sessionData = await prismaRepo.validateSessionToken(token);
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
       return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null, is_impersonating: false });
@@ -112,17 +120,19 @@ async function startServer() {
     const impersonateCookie = req.cookies?.eroga_impersonate_org;
     const isSuperAdmin = sessionData.user.platform_role === 'SUPER_ADMIN' || sessionData.user.platform_role === 'PLATFORM_ADMIN';
     if (impersonateCookie && isSuperAdmin) {
-      const targetOrg = db.getOrganizationById(impersonateCookie);
+      const targetOrg = await prismaRepo.getOrganizationById(impersonateCookie);
       if (targetOrg && targetOrg.is_active) {
         orgId = targetOrg.id;
         isImpersonating = true;
       }
     }
 
-    const org = db.getOrganizationById(orgId);
-    const companies = db.getCompanies(orgId);
-    const branches = db.getBranches(orgId);
-    const users = db.getUsers(orgId);
+    const [org, companies, branches, users] = await Promise.all([
+      prismaRepo.getOrganizationById(orgId),
+      prismaRepo.getCompanies(orgId),
+      prismaRepo.getBranches(orgId),
+      prismaRepo.getUsers(orgId)
+    ]);
 
     res.json({
       organization: org,
@@ -133,26 +143,26 @@ async function startServer() {
       is_impersonating: isImpersonating,
       impersonated_org: isImpersonating ? org : null
     });
-  });
+  }));
 
-  app.get('/api/auth/me', (req, res) => {
+  app.get('/api/auth/me', asyncRoute(async (req, res) => {
     const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
       return res.json({ user: null, organization: null });
     }
 
-    const sessionData = db.validateSessionToken(token);
+    const sessionData = await prismaRepo.validateSessionToken(token);
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
       return res.json({ user: null, organization: null });
     }
 
-    const org = db.getOrganizationById(sessionData.organization_id);
+    const org = await prismaRepo.getOrganizationById(sessionData.organization_id);
     res.json({
       user: sessionData.user,
       organization: org
     });
-  });
+  }));
 
   app.post('/api/auth/register', authLimiter, registerHandler);
   app.post('/api/auth/login', authLimiter, loginHandler);
@@ -174,112 +184,112 @@ async function startServer() {
   // --------------------------------------------------
   // Session & Authenticated User Info (public — no auth guard)
   // --------------------------------------------------
-  app.get('/api/session', (req, res) => {
+  app.get('/api/session', asyncRoute(async (req, res) => {
     const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
       return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
     }
-    const sessionData = db.validateSessionToken(token);
+    const sessionData = await prismaRepo.validateSessionToken(token);
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
       return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
     }
     const orgId = sessionData.organization_id;
     res.json({
-      organization: db.getOrganizationById(orgId),
-      companies: db.getCompanies(orgId),
-      branches: db.getBranches(orgId),
-      users: db.getUsers(orgId),
+      organization: await prismaRepo.getOrganizationById(orgId),
+      companies: await prismaRepo.getCompanies(orgId),
+      branches: await prismaRepo.getBranches(orgId),
+      users: await prismaRepo.getUsers(orgId),
       currentUser: sessionData.user
     });
-  });
+  }));
 
-  app.get('/api/auth/me', (req, res) => {
+  app.get('/api/auth/me', asyncRoute(async (req, res) => {
     const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.json({ user: null, organization: null });
-    const sessionData = db.validateSessionToken(token);
+    const sessionData = await prismaRepo.validateSessionToken(token);
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
       return res.json({ user: null, organization: null });
     }
-    res.json({ user: sessionData.user, organization: db.getOrganizationById(sessionData.organization_id) });
-  });
+    res.json({ user: sessionData.user, organization: await prismaRepo.getOrganizationById(sessionData.organization_id) });
+  }));
 
   // --------------------------------------------------
   // Platform & SuperAdmin Routes (Strict SUPER_ADMIN verification)
   // --------------------------------------------------
-  app.get('/api/organizations', platformAdminMiddleware, (req: AuthenticatedRequest, res) => {
-    res.json({ organizations: db.getOrganizations() });
-  });
+  app.get('/api/organizations', platformAdminMiddleware, asyncRoute(async (req: AuthenticatedRequest, res) => {
+    res.json({ organizations: await prismaRepo.getOrganizations() });
+  }));
 
-  app.post('/api/organizations', platformAdminMiddleware, (req: AuthenticatedRequest, res) => {
-    const org = db.saveOrganization(req.body);
+  app.post('/api/organizations', platformAdminMiddleware, asyncRoute(async (req: AuthenticatedRequest, res) => {
+    const org = await prismaRepo.saveOrganization(req.body);
     res.status(201).json(org);
-  });
+  }));
 
   app.get('/api/platform/tenants', platformAdminMiddleware, getTenantsHandler);
   app.post(['/api/platform/impersonation/:organizationId/start', '/api/platform/impersonation/start/:organizationId'], platformAdminMiddleware, startImpersonationHandler);
   app.post('/api/platform/impersonation/stop', platformAdminMiddleware, stopImpersonationHandler);
 
   // Tenant Onboarding State Persistence
-  app.post('/api/organization/onboarding/complete', (req: AuthenticatedRequest, res) => {
+  app.post('/api/organization/onboarding/complete', asyncRoute(async (req: AuthenticatedRequest, res) => {
     const orgId = req.organization_id!;
-    const org = db.getOrganizationById(orgId);
+    const org = await prismaRepo.getOrganizationById(orgId);
     if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
 
-    const updated = db.saveOrganization({
+    const updated = await prismaRepo.saveOrganization({
       id: orgId,
       onboarding_step: 7,
       onboarding_done_at: new Date().toISOString()
     } as any);
 
     res.json({ success: true, organization: updated });
-  });
+  }));
 
   // --------------------------------------------------
   // Users & Team Management (Gestión de Equipo)
   // --------------------------------------------------
-  app.get('/api/users', (req, res) => {
+  app.get('/api/users', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const includeInactive = req.query.includeInactive === 'true';
-    res.json({ users: db.getUsers(orgId, includeInactive) });
-  });
+    res.json({ users: await prismaRepo.getUsers(orgId, includeInactive) });
+  }));
 
-  app.post('/api/users', (req, res) => {
+  app.post('/api/users', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.saveUser(orgId, req.body, userId, userName);
+    const result = await prismaRepo.saveUser(orgId, req.body, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.status(201).json({ user: result.user });
-  });
+  }));
 
-  app.put('/api/users/:id', (req, res) => {
+  app.put('/api/users/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.saveUser(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    const result = await prismaRepo.saveUser(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.json({ user: result.user });
-  });
+  }));
 
-  app.delete('/api/users/:id', (req, res) => {
+  app.delete('/api/users/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.deactivateUser(orgId, req.params.id, userId, userName);
+    const result = await prismaRepo.deactivateUser(orgId, req.params.id, userId, userName);
     if (!result.success) {
       return res.status(404).json({ error: result.message });
     }
     res.json(result);
-  });
+  }));
 
   // --------------------------------------------------
   // RBAC Roles & Permissions Matrix Management
@@ -355,91 +365,91 @@ async function startServer() {
   // --------------------------------------------------
   // Companies & Branches Management (Mi Empresa & Sedes)
   // --------------------------------------------------
-  app.get('/api/companies', (req, res) => {
+  app.get('/api/companies', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const includeInactive = req.query.includeInactive === 'true';
-    res.json({ companies: db.getCompanies(orgId, includeInactive) });
-  });
+    res.json({ companies: await prismaRepo.getCompanies(orgId, includeInactive) });
+  }));
 
-  app.post('/api/companies', (req, res) => {
+  app.post('/api/companies', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
     
-    const result = db.saveCompany(orgId, req.body, userId, userName);
+    const result = await prismaRepo.saveCompany(orgId, req.body, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.status(201).json({ company: result.company });
-  });
+  }));
 
-  app.put('/api/companies/:id', (req, res) => {
+  app.put('/api/companies/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.saveCompany(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    const result = await prismaRepo.saveCompany(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.json({ company: result.company });
-  });
+  }));
 
-  app.delete('/api/companies/:id', (req, res) => {
+  app.delete('/api/companies/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.deactivateCompany(orgId, req.params.id, userId, userName);
+    const result = await prismaRepo.deactivateCompany(orgId, req.params.id, userId, userName);
     if (!result.success) {
       return res.status(404).json({ error: result.message });
     }
     res.json(result);
-  });
+  }));
 
   // Branches
-  app.get('/api/branches', (req, res) => {
+  app.get('/api/branches', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const companyId = req.query.company_id as string;
     const includeInactive = req.query.includeInactive === 'true';
-    res.json({ branches: db.getBranches(orgId, companyId, includeInactive) });
-  });
+    res.json({ branches: await prismaRepo.getBranches(orgId, companyId, includeInactive) });
+  }));
 
-  app.post('/api/branches', (req, res) => {
+  app.post('/api/branches', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.saveBranch(orgId, req.body, userId, userName);
+    const result = await prismaRepo.saveBranch(orgId, req.body, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.status(201).json({ branch: result.branch });
-  });
+  }));
 
-  app.put('/api/branches/:id', (req, res) => {
+  app.put('/api/branches/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.saveBranch(orgId, { ...req.body, id: req.params.id }, userId, userName);
+    const result = await prismaRepo.saveBranch(orgId, { ...req.body, id: req.params.id }, userId, userName);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
     res.json({ branch: result.branch });
-  });
+  }));
 
-  app.delete('/api/branches/:id', (req, res) => {
+  app.delete('/api/branches/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
-    const result = db.deactivateBranch(orgId, req.params.id, userId, userName);
+    const result = await prismaRepo.deactivateBranch(orgId, req.params.id, userId, userName);
     if (!result.success) {
       return res.status(404).json({ error: result.message });
     }
     res.json(result);
-  });
+  }));
 
   // --------------------------------------------------
   // API Keys Management (Configuración → API Keys)
@@ -605,10 +615,10 @@ async function startServer() {
   });
 
   // Audit Logs
-  app.get('/api/audit-logs', (req, res) => {
+  app.get('/api/audit-logs', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
-    res.json({ logs: db.getAuditLogs(orgId) });
-  });
+    res.json({ logs: await prismaRepo.getAuditLogs(orgId) });
+  }));
 
   // ERP Config
   app.get('/api/erp/config', (req, res) => {
@@ -623,7 +633,7 @@ async function startServer() {
   });
 
   // Expenses (Erogaciones)
-  app.get('/api/expenses', (req, res) => {
+  app.get('/api/expenses', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const filters = {
       status: req.query.status as string,
@@ -631,34 +641,39 @@ async function startServer() {
       company_id: req.query.company_id as string,
       branch_id: req.query.branch_id as string
     };
-    const expenses = db.getExpenses(orgId, filters);
+    const expenses = await prismaRepo.getExpenses(orgId, filters);
     res.json(expenses);
-  });
+  }));
 
-  app.get('/api/expenses/:id', (req, res) => {
+  app.get('/api/expenses/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
-    const expense = db.getExpenseById(orgId, req.params.id);
+    const expense = await prismaRepo.getExpenseById(orgId, req.params.id);
     if (!expense) return res.status(404).json({ error: 'Expense record not found' });
     res.json(expense);
-  });
+  }));
 
-  app.post('/api/expenses', (req, res) => {
+  app.post('/api/expenses', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
-    const saved = db.saveExpense(orgId, req.body);
+    const saved = await prismaRepo.saveExpense(orgId, {
+      ...req.body,
+      organization_id: orgId,
+      created_by_user_id: (req as AuthenticatedRequest).user_id,
+      created_by_name: (req as AuthenticatedRequest).user_name
+    });
     res.status(201).json(saved);
-  });
+  }));
 
-  app.put('/api/expenses/:id', (req, res) => {
+  app.put('/api/expenses/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
-    const updated = db.saveExpense(orgId, { ...req.body, id: req.params.id });
+    const updated = await prismaRepo.saveExpense(orgId, { ...req.body, id: req.params.id });
     res.json(updated);
-  });
+  }));
 
-  app.patch('/api/expenses/:id/status', (req, res) => {
+  app.patch('/api/expenses/:id/status', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const { status, notes, reviewer_name, correction_note } = req.body;
     
-    const updated = db.saveExpense(orgId, {
+    const updated = await prismaRepo.saveExpense(orgId, {
       id: req.params.id,
       status,
       approval_notes: notes,
@@ -668,35 +683,35 @@ async function startServer() {
     });
 
     res.json(updated);
-  });
+  }));
 
-  app.delete('/api/expenses/:id', (req, res) => {
+  app.delete('/api/expenses/:id', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
-    const success = db.deleteExpense(orgId, req.params.id);
+    const success = await prismaRepo.deleteExpense(orgId, req.params.id);
     if (!success) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true, message: 'Comprobante eliminado con éxito.' });
-  });
+  }));
 
   // Batch status update
-  app.post('/api/expenses/batch-status', (req: AuthenticatedRequest, res) => {
+  app.post('/api/expenses/batch-status', asyncRoute(async (req: AuthenticatedRequest, res) => {
     const orgId = req.organization_id!;
     const { expenseIds, status, reviewerName, notes } = req.body;
     if (!Array.isArray(expenseIds)) {
       return res.status(400).json({ error: 'expenseIds array is required' });
     }
 
-    const results = expenseIds.map(id => {
-      return db.saveExpense(orgId, {
+    const results = await Promise.all(expenseIds.map((id: string) => {
+      return prismaRepo.saveExpense(orgId, {
         id,
         status,
         reviewed_by: reviewerName,
         reviewed_at: new Date().toISOString(),
         approval_notes: notes
       });
-    });
+    }));
 
     res.json({ updatedCount: results.length, expenses: results });
-  });
+  }));
 
   // --------------------------------------------------
   // AI OCR & Extraction Routes
@@ -801,12 +816,12 @@ async function startServer() {
   // --------------------------------------------------
   // DGII 606 & AllSender ERP Sync Routes
   // --------------------------------------------------
-  app.get('/api/reports/dgii-606', (req, res) => {
+  app.get('/api/reports/dgii-606', asyncRoute(async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const companyId = req.query.company_id as string;
     const rawPeriod = (req.query.period as string || '').replace(/[^0-9]/g, '');
     
-    let expenses = db.getExpenses(orgId).filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
+    let expenses = (await prismaRepo.getExpenses(orgId)).filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
     if (companyId) {
       expenses = expenses.filter(e => e.company_id === companyId);
     }
@@ -855,21 +870,21 @@ async function startServer() {
       total_itbis: records606.reduce((a, b) => a + b.itbis_facturado, 0),
       records: records606
     });
-  });
+  }));
 
   // DGII 606 PDF Export Route
   app.get(['/api/reports/dgii-606/pdf', '/api/reports/expenses/pdf'], async (req, res) => {
     try {
       const orgId = (req as AuthenticatedRequest).organization_id!;
-      const org = db.getOrganizationById(orgId);
+      const org = await prismaRepo.getOrganizationById(orgId);
       if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
       
       const companyId = req.query.company_id as string;
-      const company = companyId ? db.getCompanies(orgId).find(c => c.id === companyId) : undefined;
+      const company = companyId ? await prismaRepo.getCompanyById(orgId, companyId) : undefined;
       const branchId = req.query.branch_id as string;
-      const branch = branchId ? db.getBranches(orgId).find(b => b.id === branchId) : undefined;
+      const branch = branchId ? await prismaRepo.getBranchById(orgId, branchId) : undefined;
       
-      const expenses = db.getExpenses(orgId, { company_id: companyId, branch_id: branchId });
+      const expenses = await prismaRepo.getExpenses(orgId, { company_id: companyId, branch_id: branchId });
       const pdfBuffer = await generateExpensesPDF({
         organization: org,
         company,
@@ -892,12 +907,12 @@ async function startServer() {
   app.get(['/api/reports/dgii-606/excel', '/api/reports/dgii-606/xlsx', '/api/reports/expenses/excel'], async (req, res) => {
     try {
       const orgId = (req as AuthenticatedRequest).organization_id!;
-      const org = db.getOrganizationById(orgId);
+      const org = await prismaRepo.getOrganizationById(orgId);
       if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
 
       const companyId = req.query.company_id as string;
-      const company = companyId ? db.getCompanies(orgId).find(c => c.id === companyId) : undefined;
-      const expenses = db.getExpenses(orgId, { company_id: companyId });
+      const company = companyId ? await prismaRepo.getCompanyById(orgId, companyId) : undefined;
+      const expenses = await prismaRepo.getExpenses(orgId, { company_id: companyId });
 
       const xlsxBuffer = await generateExpensesXLSX({
         organization: org,
@@ -929,7 +944,7 @@ async function startServer() {
       });
     }
 
-    let targetExpenses = db.getExpenses(orgId);
+    let targetExpenses = await prismaRepo.getExpenses(orgId);
     if (Array.isArray(expenseIds) && expenseIds.length > 0) {
       targetExpenses = targetExpenses.filter(e => expenseIds.includes(e.id));
     } else {
@@ -940,7 +955,7 @@ async function startServer() {
     
     // Save updated synced records back into DB
     for (const exp of syncResult.synced_expenses) {
-      db.saveExpense(orgId, exp);
+      await prismaRepo.saveExpense(orgId, exp);
     }
 
     res.json({
@@ -1029,22 +1044,22 @@ async function startServer() {
   });
 
   // 2. Catalogs: Companies, Branches, Suppliers, Categories, Cost Centers
-  app.get('/api/v1/companies', apiKeyAuthMiddleware('companies:read'), (req, res) => {
+  app.get('/api/v1/companies', apiKeyAuthMiddleware('companies:read'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     res.json({
       success: true,
-      data: db.getCompanies(orgId)
+      data: await prismaRepo.getCompanies(orgId)
     });
-  });
+  }));
 
-  app.get('/api/v1/branches', apiKeyAuthMiddleware('companies:read'), (req, res) => {
+  app.get('/api/v1/branches', apiKeyAuthMiddleware('companies:read'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const companyId = req.query.company_id as string;
     res.json({
       success: true,
-      data: db.getBranches(orgId, companyId)
+      data: await prismaRepo.getBranches(orgId, companyId)
     });
-  });
+  }));
 
   app.get('/api/v1/suppliers', apiKeyAuthMiddleware('suppliers:read'), (req, res) => {
     const orgId = (req as any).organization_id;
@@ -1200,23 +1215,23 @@ async function startServer() {
   });
 
   // 4. Expenses Management (CRUD, Approve, Reject)
-  app.get('/api/v1/expenses', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+  app.get('/api/v1/expenses', apiKeyAuthMiddleware('expenses:read'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const companyId = (req.query.company_id as string) || (req as any).company_id;
     const branchId = req.query.branch_id as string;
     const status = req.query.status as string;
 
-    const expenses = db.getExpenses(orgId, { company_id: companyId, branch_id: branchId, status });
+    const expenses = await prismaRepo.getExpenses(orgId, { company_id: companyId, branch_id: branchId, status });
     res.json({
       success: true,
       total: expenses.length,
       data: expenses
     });
-  });
+  }));
 
-  app.get('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:read'), (req, res) => {
+  app.get('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:read'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
-    const expense = db.getExpenseById(orgId, req.params.id);
+    const expense = await prismaRepo.getExpenseById(orgId, req.params.id);
 
     if (!expense) {
       return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
@@ -1226,9 +1241,9 @@ async function startServer() {
       success: true,
       data: expense
     });
-  });
+  }));
 
-  app.post('/api/v1/expenses', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+  app.post('/api/v1/expenses', apiKeyAuthMiddleware('expenses:write'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const defaultCompanyId = (req as any).company_id;
     const idempotencyKey = (req.headers['idempotency-key'] || req.body.idempotency_key) as string;
@@ -1277,24 +1292,28 @@ async function startServer() {
       status: body.status || 'PENDIENTE_REVISION'
     };
 
-    const saved = db.saveExpense(orgId, expensePayload);
+    const saved = await prismaRepo.saveExpense(orgId, {
+      ...expensePayload,
+      created_by_user_id: (req as any).apiKey?.created_by,
+      created_by_name: (req as any).apiKey?.name
+    });
 
     res.status(201).json({
       success: true,
       message: 'Erogación radicada exitosamente.',
       data: saved
     });
-  });
+  }));
 
-  app.patch('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+  app.patch('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
-    const existing = db.getExpenseById(orgId, req.params.id);
+    const existing = await prismaRepo.getExpenseById(orgId, req.params.id);
 
     if (!existing) {
       return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
     }
 
-    const updated = db.saveExpense(orgId, {
+    const updated = await prismaRepo.saveExpense(orgId, {
       ...req.body,
       id: existing.id
     });
@@ -1304,28 +1323,28 @@ async function startServer() {
       message: 'Erogación actualizada exitosamente.',
       data: updated
     });
-  });
+  }));
 
-  app.delete('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+  app.delete('/api/v1/expenses/:id', apiKeyAuthMiddleware('expenses:write'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
-    const existing = db.getExpenseById(orgId, req.params.id);
+    const existing = await prismaRepo.getExpenseById(orgId, req.params.id);
 
     if (!existing) {
       return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
     }
 
-    db.deleteExpense(orgId, existing.id);
+    await prismaRepo.deleteExpense(orgId, existing.id);
     res.json({
       success: true,
       message: 'Erogación eliminada exitosamente.'
     });
-  });
+  }));
 
-  app.post('/api/v1/expenses/:id/approve', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+  app.post('/api/v1/expenses/:id/approve', apiKeyAuthMiddleware('expenses:write'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const { reviewer_name, notes } = req.body || {};
 
-    const approved = db.approveExpense(orgId, req.params.id, reviewer_name || 'API Integration', notes || 'Aprobado vía API v1');
+    const approved = await prismaRepo.approveExpense(orgId, req.params.id, reviewer_name || 'API Integration', notes || 'Aprobado vía API v1');
     if (!approved) {
       return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
     }
@@ -1335,13 +1354,13 @@ async function startServer() {
       message: 'Erogación aprobada exitosamente.',
       data: approved
     });
-  });
+  }));
 
-  app.post('/api/v1/expenses/:id/reject', apiKeyAuthMiddleware('expenses:write'), (req, res) => {
+  app.post('/api/v1/expenses/:id/reject', apiKeyAuthMiddleware('expenses:write'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const { reviewer_name, reason } = req.body || {};
 
-    const rejected = db.rejectExpense(orgId, req.params.id, reviewer_name || 'API Integration', reason || 'Rechazado vía API v1');
+    const rejected = await prismaRepo.rejectExpense(orgId, req.params.id, reviewer_name || 'API Integration', reason || 'Rechazado vía API v1');
     if (!rejected) {
       return res.status(404).json({ error: 'Not Found', message: 'Erogación no encontrada.' });
     }
@@ -1351,14 +1370,14 @@ async function startServer() {
       message: 'Erogación rechazada.',
       data: rejected
     });
-  });
+  }));
 
   // 5. Reports: DGII 606
-  app.get('/api/v1/reports/dgii-606', apiKeyAuthMiddleware('dgii:export'), (req, res) => {
+  app.get('/api/v1/reports/dgii-606', apiKeyAuthMiddleware('dgii:export'), asyncRoute(async (req, res) => {
     const orgId = (req as any).organization_id;
     const companyId = (req.query.company_id as string) || (req as any).company_id;
 
-    const expenses = db.getExpenses(orgId, { company_id: companyId })
+    const expenses = (await prismaRepo.getExpenses(orgId, { company_id: companyId }))
       .filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
 
     const records606 = expenses.map(e => {
@@ -1396,7 +1415,7 @@ async function startServer() {
       total_itbis: records606.reduce((a, b) => a + b.itbis_facturado, 0),
       data: records606
     });
-  });
+  }));
 
   // 6. AI Providers & Telemetry
   app.get('/api/v1/ai/providers', apiKeyAuthMiddleware(), (req, res) => {
@@ -1463,6 +1482,19 @@ async function startServer() {
     });
   });
 
+  // All async SQL handlers reach this boundary. A failed transaction is never
+  // converted into a successful HTTP response.
+  app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(error);
+    const statusCode = error instanceof RepositoryError ? error.statusCode : 500;
+    const code = error instanceof RepositoryError ? error.code : 'INTERNAL_ERROR';
+    console.error(`[ErogaAI] ${code}:`, error?.message || error);
+    res.status(statusCode).json({
+      error: statusCode === 500 ? 'Error interno del servidor.' : (error.message || 'La operación no pudo completarse.'),
+      code
+    });
+  });
+
   // --------------------------------------------------
   // Vite Integration for Dev / Static Serving for Prod
   // --------------------------------------------------
@@ -1485,4 +1517,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error('[ErogaAI] Server startup failed:', error?.message || error);
+  process.exitCode = 1;
+});

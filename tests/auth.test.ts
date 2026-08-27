@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { db } from '../server/db.ts';
 import bcrypt from 'bcryptjs';
+import { prismaRepo } from '../server/database/prisma.repository.ts';
 
 describe('Auth & Security Validation', () => {
   it('hashes passwords securely with bcrypt', async () => {
@@ -12,22 +12,23 @@ describe('Auth & Security Validation', () => {
     expect(isMatch).toBe(true);
   });
 
-  it('creates and validates session tokens', () => {
-    const org = db.saveOrganization({ name: 'Test Org', rnc: '101-00000-1' });
-    const userResult = db.saveUser(org.id, {
+  it('creates and validates SQL-backed session tokens', async () => {
+    const org = await prismaRepo.saveOrganization({ name: `Test Org ${Date.now()}`, rnc: '101-00000-1' });
+    const userResult = await prismaRepo.saveUser(org.id, {
       name: 'Test User',
-      email: 'test@example.com',
+      email: `test_${Date.now()}@example.com`,
       role: 'ADMIN',
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      password_hash: await bcrypt.hash('Secret123!', 10)
     });
 
     expect(userResult.user).toBeDefined();
 
-    const session = db.createSession(userResult.user!.id, org.id, '127.0.0.1', 'Vitest');
+    const session = await prismaRepo.createSession(userResult.user!.id, org.id, '127.0.0.1', 'Vitest');
     expect(session.token).toBeDefined();
     expect(session.token.startsWith('eroga_sess_')).toBe(true);
 
-    const validated = db.validateSessionToken(session.token);
+    const validated = await prismaRepo.validateSessionToken(session.token);
     expect(validated).not.toBeNull();
     expect(validated?.user.id).toBe(userResult.user!.id);
     expect(validated?.organization_id).toBe(org.id);

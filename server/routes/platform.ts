@@ -1,31 +1,37 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware.ts';
-import { db } from '../db.ts';
+import { prismaRepo } from '../database/prisma.repository.ts';
 
 /**
  * Ensures user possesses Platform Role (SUPER_ADMIN or PLATFORM_ADMIN)
  * Strictest security check — organization role ADMIN is NEVER permitted platform access.
  */
-export function platformAdminMiddleware(req: AuthenticatedRequest, res: Response, next: any) {
-  const user = db.findUserByEmail(req.user_email || '');
-  if (!user || (user.platform_role !== 'SUPER_ADMIN' && user.platform_role !== 'PLATFORM_ADMIN')) {
-    return res.status(403).json({ 
-      error: 'Acceso denegado: Se requieren permisos exclusivos de SuperAdmin de Plataforma', 
-      code: 'PLATFORM_FORBIDDEN' 
-    });
+export async function platformAdminMiddleware(req: AuthenticatedRequest, res: Response, next: any) {
+  try {
+    const user = req.user_id ? await prismaRepo.getUserById(req.user_id) : null;
+    if (!user || (user.platform_role !== 'SUPER_ADMIN' && user.platform_role !== 'PLATFORM_ADMIN')) {
+      return res.status(403).json({
+        error: 'Acceso denegado: Se requieren permisos exclusivos de SuperAdmin de Plataforma',
+        code: 'PLATFORM_FORBIDDEN'
+      });
+    }
+    return next();
+  } catch (error) {
+    return next(error);
   }
-  next();
 }
 
 /**
  * List all tenants (Organizations)
  */
 export async function getTenantsHandler(req: AuthenticatedRequest, res: Response) {
-  const orgs = db.getOrganizations();
-  const tenants = orgs.map(org => {
-    const companies = db.getCompanies(org.id);
-    const users = db.getUsers(org.id);
-    const expenses = db.getExpenses(org.id);
+  const orgs = await prismaRepo.getOrganizations();
+  const tenants = await Promise.all(orgs.map(async org => {
+    const [companies, users, expenses] = await Promise.all([
+      prismaRepo.getCompanies(org.id),
+      prismaRepo.getUsers(org.id),
+      prismaRepo.getExpenses(org.id)
+    ]);
     return {
       ...org,
       companies_count: companies.length,
@@ -33,7 +39,7 @@ export async function getTenantsHandler(req: AuthenticatedRequest, res: Response
       expenses_count: expenses.length,
       total_spent: expenses.reduce((acc, e) => acc + (e.status !== 'RECHAZADO' ? e.total_amount : 0), 0)
     };
-  });
+  }));
   res.json({ tenants });
 }
 
@@ -42,7 +48,7 @@ export async function getTenantsHandler(req: AuthenticatedRequest, res: Response
  */
 export async function startImpersonationHandler(req: AuthenticatedRequest, res: Response) {
   const { organizationId } = req.params;
-  const targetOrg = db.getOrganizationById(organizationId);
+  const targetOrg = await prismaRepo.getOrganizationById(organizationId);
 
   if (!targetOrg) {
     return res.status(404).json({ error: 'Organización inquilina no encontrada' });
@@ -56,7 +62,7 @@ export async function startImpersonationHandler(req: AuthenticatedRequest, res: 
     maxAge: 4 * 60 * 60 * 1000 // 4 hours max impersonation window
   });
 
-  db.logAudit({
+  await prismaRepo.logAudit({
     organization_id: targetOrg.id,
     user_id: req.user_id || 'usr_superadmin',
     user_name: req.user_name || 'SuperAdmin',

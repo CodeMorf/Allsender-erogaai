@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
-import { db } from './db.ts';
 import { cache } from './cache/index.ts';
+import { prismaRepo } from './database/prisma.repository.ts';
+import { db } from './db.ts';
 
 export interface AuthenticatedRequest extends Request {
   user_id?: string;
@@ -27,54 +28,53 @@ export function requestIdMiddleware(req: AuthenticatedRequest, res: Response, ne
  * Injects req.organization_id and req.user_id. Never trusts frontend-supplied identity headers.
  */
 export async function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+  try {
+    const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
 
-  if (!sessionToken) {
-    return res.status(401).json({ 
-      error: 'Autenticación requerida', 
-      code: 'UNAUTHORIZED' 
-    });
-  }
-
-  // Fast cache lookup (Redis / Memory)
-  let sessionData = await cache.get<any>(`session:${sessionToken}`);
-  if (!sessionData) {
-    sessionData = db.validateSessionToken(sessionToken);
-    if (sessionData && sessionData.user) {
-      await cache.set(`session:${sessionToken}`, sessionData, 300); // 5 minutes TTL
+    if (!sessionToken) {
+      return res.status(401).json({
+        error: 'Autenticación requerida',
+        code: 'UNAUTHORIZED'
+      });
     }
-  }
 
-  if (!sessionData || !sessionData.user) {
-    res.clearCookie('eroga_session');
-    await cache.del(`session:${sessionToken}`);
-    return res.status(401).json({ 
-      error: 'Sesión expirada o inválida. Por favor inicie sesión nuevamente.', 
-      code: 'SESSION_EXPIRED' 
-    });
-  }
+    // SQL is authoritative for every request. Redis is deliberately not used as
+    // an authorization source because a stale session must not survive a revoke.
+    const sessionData = await prismaRepo.validateSessionToken(sessionToken);
 
-  req.user_id = sessionData.user.id;
-  req.organization_id = sessionData.user.organization_id;
-  req.user_role = sessionData.user.role;
-  req.user_name = sessionData.user.name;
-  req.user_email = sessionData.user.email;
-
-  // Server-Side Impersonation: ONLY permitted for platform SUPER_ADMIN / PLATFORM_ADMIN
-  const impersonateOrgCookie = req.cookies?.eroga_impersonate_org;
-  const isPlatformSuperAdmin = sessionData.user.platform_role === 'SUPER_ADMIN' || sessionData.user.platform_role === 'PLATFORM_ADMIN';
-
-  if (impersonateOrgCookie && isPlatformSuperAdmin) {
-    const targetOrg = db.getOrganizationById(impersonateOrgCookie);
-    if (targetOrg && targetOrg.is_active) {
-      req.organization_id = targetOrg.id;
-      // Mark as impersonated in request context
-      (req as any).is_impersonating = true;
-      (req as any).impersonated_org_name = targetOrg.name;
+    if (!sessionData || !sessionData.user) {
+      res.clearCookie('eroga_session');
+      await cache.del(`session:${sessionToken}`);
+      return res.status(401).json({
+        error: 'Sesión expirada o inválida. Por favor inicie sesión nuevamente.',
+        code: 'SESSION_EXPIRED'
+      });
     }
-  }
 
-  next();
+    req.user_id = sessionData.user.id;
+    req.organization_id = sessionData.user.organization_id;
+    req.user_role = sessionData.user.role;
+    req.user_name = sessionData.user.name;
+    req.user_email = sessionData.user.email;
+
+    // Server-Side Impersonation: ONLY permitted for platform SUPER_ADMIN / PLATFORM_ADMIN
+    const impersonateOrgCookie = req.cookies?.eroga_impersonate_org;
+    const isPlatformSuperAdmin = sessionData.user.platform_role === 'SUPER_ADMIN' || sessionData.user.platform_role === 'PLATFORM_ADMIN';
+
+    if (impersonateOrgCookie && isPlatformSuperAdmin) {
+      const targetOrg = await prismaRepo.getOrganizationById(impersonateOrgCookie);
+      if (targetOrg && targetOrg.is_active) {
+        req.organization_id = targetOrg.id;
+        // Mark as impersonated in request context
+        (req as any).is_impersonating = true;
+        (req as any).impersonated_org_name = targetOrg.name;
+      }
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 }
 
 /**

@@ -7,7 +7,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:3000',
   },
   projects: [
     {
@@ -17,8 +17,8 @@ export default defineConfig({
   ],
   webServer: {
     command: 'node dist/server.cjs',
-    url: 'http://127.0.0.1:3000/api/health',
-    reuseExistingServer: true,
+    url: `${process.env.E2E_BASE_URL || 'http://127.0.0.1:3000'}/api/health`,
+    reuseExistingServer: process.env.E2E_REUSE_SERVER === 'true',
     timeout: 30000,
     env: {
       ...process.env,

@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/erogaai_ci?schema=public
 
     services:
       postgres:

@@ -1,9 +1,9 @@
 import { Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { db } from './db.ts';
 import { cache } from './cache/index.ts';
 import { AuthenticatedRequest } from './middleware.ts';
 import { sendEmail } from './mailer.ts';
+import { prismaRepo, RepositoryError } from './database/prisma.repository.ts';
 
 /**
  * Sets secure HttpOnly session cookie
@@ -32,8 +32,8 @@ export async function registerHandler(req: AuthenticatedRequest, res: Response) 
       return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres.' });
     }
 
-    // Check unique email
-    const existing = db.findUserByEmail(email);
+    // Check unique email in SQL before starting the tenant transaction.
+    const existing = await prismaRepo.findUserByEmail(email);
     if (existing) {
       return res.status(409).json({ error: 'Ya existe una cuenta registrada con este correo electrónico.' });
     }
@@ -41,64 +41,48 @@ export async function registerHandler(req: AuthenticatedRequest, res: Response) 
     // Hash password
     const password_hash = await bcrypt.hash(password, 10);
 
-    // 1. Create Organization
-    const org = db.saveOrganization({
-      name: company_name,
-      rnc: rnc,
-      currency: 'DOP',
-      plan: 'PROFESSIONAL',
-      phone: phone || ''
+    // Organization, owner, company and branch are one SQL transaction.
+    const tenant = await prismaRepo.registerTenant({
+      organization: {
+        name: company_name,
+        rnc,
+        currency: 'DOP',
+        plan: 'PROFESSIONAL',
+        phone: phone || ''
+      },
+      user: {
+        email,
+        name,
+        password_hash,
+        role: 'ADMIN',
+        department: 'Dirección General',
+        status: 'ACTIVE',
+        is_active: true
+      },
+      company: {
+        name: company_name,
+        rnc,
+        id_type: 'RNC',
+        tax_regime: 'REGIMEN_GENERAL',
+        address: 'Santo Domingo, República Dominicana',
+        province: 'Santo Domingo',
+        municipality: 'Distrito Nacional',
+        currency: 'DOP',
+        country: country || 'Dominican Republic',
+        is_main: true,
+        status: 'ACTIVO',
+        is_active: true
+      }
     });
 
-    // 2. Create User
-    const userResult = db.saveUser(org.id, {
-      email,
-      name,
-      password_hash,
-      role: 'ADMIN',
-      department: 'Dirección General',
-      status: 'ACTIVE',
-      is_active: true
-    }, 'system', 'Sistema de Registro');
+    const { organization: org, user } = tenant;
 
-    if (userResult.error || !userResult.user) {
-      return res.status(400).json({ error: userResult.error || 'Error al crear usuario' });
-    }
-
-    const user = userResult.user;
-
-    // 3. Create Main Company
-    db.saveCompany(org.id, {
-      name: company_name,
-      rnc: rnc,
-      id_type: 'RNC',
-      tax_regime: 'REGIMEN_GENERAL',
-      address: 'Santo Domingo, República Dominicana',
-      province: 'Santo Domingo',
-      municipality: 'Distrito Nacional',
-      currency: 'DOP',
-      country: country || 'Dominican Republic',
-      is_main: true,
-      status: 'ACTIVO',
-      is_active: true
-    });
-
-    // 4. Create Session
+    // The session is also stored as a hash in SQL before the cookie is issued.
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || 'Browser';
-    const session = db.createSession(user.id, org.id, ip, userAgent);
+    const session = await prismaRepo.createSession(user.id, org.id, ip, userAgent);
 
     setSessionCookie(res, session.token);
-
-    db.logAudit({
-      organization_id: org.id,
-      user_id: user.id,
-      user_name: user.name,
-      action: 'CREAR_USUARIO',
-      entity_type: 'USER',
-      entity_id: user.id,
-      details: `Nuevo usuario y organización registradas ("${org.name}", RNC: ${org.rnc}).`
-    });
 
     res.status(201).json({
       message: 'Cuenta y organización creadas exitosamente.',
@@ -107,7 +91,10 @@ export async function registerHandler(req: AuthenticatedRequest, res: Response) 
     });
   } catch (error: any) {
     console.error('Register error:', error);
-    res.status(500).json({ error: 'Error interno durante el registro: ' + error.message });
+    if (error instanceof RepositoryError) {
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
+    }
+    res.status(500).json({ error: 'Error interno durante el registro.' });
   }
 }
 
@@ -122,7 +109,7 @@ export async function loginHandler(req: AuthenticatedRequest, res: Response) {
       return res.status(400).json({ error: 'Correo y contraseña son obligatorios.' });
     }
 
-    const user = db.findUserByEmail(email);
+    const user = await prismaRepo.findUserByEmail(email);
     if (!user || !user.is_active) {
       return res.status(401).json({ error: 'Credenciales inválidas o cuenta desactivada.' });
     }
@@ -137,16 +124,16 @@ export async function loginHandler(req: AuthenticatedRequest, res: Response) {
       return res.status(401).json({ error: 'Credenciales inválidas o contraseña incorrecta.' });
     }
 
-    const org = db.getOrganizationById(user.organization_id);
+    const org = await prismaRepo.getOrganizationById(user.organization_id);
 
     // Create session
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || 'Browser';
-    const session = db.createSession(user.id, user.organization_id, ip, userAgent);
+    const session = await prismaRepo.createSession(user.id, user.organization_id, ip, userAgent);
 
     setSessionCookie(res, session.token);
 
-    db.logAudit({
+    await prismaRepo.logAudit({
       organization_id: user.organization_id,
       user_id: user.id,
       user_name: user.name,
@@ -171,9 +158,9 @@ export async function loginHandler(req: AuthenticatedRequest, res: Response) {
  * Logout Handler
  */
 export async function logoutHandler(req: AuthenticatedRequest, res: Response) {
-  const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+    const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
   if (sessionToken) {
-    db.revokeSessionToken(sessionToken);
+    await prismaRepo.revokeSessionToken(sessionToken);
     await cache.del(`session:${sessionToken}`);
   }
   res.clearCookie('eroga_session');
@@ -188,13 +175,13 @@ export async function forgotPasswordHandler(req: AuthenticatedRequest, res: Resp
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'El correo electrónico es requerido.' });
 
-  const user = db.findUserByEmail(email);
+  const user = await prismaRepo.findUserByEmail(email);
   if (!user) {
     // Return generic success to prevent email enumeration
     return res.json({ message: 'Si el correo existe, recibirá instrucciones para restablecer su contraseña.' });
   }
 
-  const resetToken = db.generatePasswordResetToken(user.id);
+  const resetToken = await prismaRepo.generatePasswordResetToken(user.id);
   const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
 
   await sendEmail({
@@ -220,16 +207,19 @@ export async function resetPasswordHandler(req: AuthenticatedRequest, res: Respo
       return res.status(400).json({ error: 'La nueva contraseña debe contener al menos 8 caracteres.' });
     }
 
-    const user = db.validatePasswordResetToken(token);
+    const user = await prismaRepo.validatePasswordResetToken(token);
     if (!user) {
       return res.status(400).json({ error: 'El enlace de restablecimiento es inválido o ha expirado.' });
     }
 
     const passwordHash = await bcrypt.hash(new_password, 10);
-    db.updateUserPassword(user.id, passwordHash);
-    db.consumePasswordResetToken(token);
+    const passwordUpdated = await prismaRepo.updateUserPassword(user.id, passwordHash);
+    if (!passwordUpdated) {
+      return res.status(400).json({ error: 'El usuario del enlace ya no está disponible.' });
+    }
+    await prismaRepo.consumePasswordResetToken(token);
 
-    db.logAudit({
+    await prismaRepo.logAudit({
       organization_id: user.organization_id,
       user_id: user.id,
       user_name: user.name,

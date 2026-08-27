@@ -11,3 +11,4 @@ coverage/
 data/*.json
 prisma/*.db
 prisma/*.db-journal
+test-results/
