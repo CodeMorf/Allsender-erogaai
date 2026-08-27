@@ -79,9 +79,13 @@ export async function syncExpensesToAllSenderERP(
       if (config.encrypted_api_key) {
         try {
           realApiKey = decryptApiKey(config.encrypted_api_key);
-        } catch {
-          realApiKey = config.api_key_masked;
+        } catch (decErr: any) {
+          errors.push(`Comprobante ${exp.ncf || exp.id}: ERP_CREDENTIAL_DECRYPTION_FAILED - No se pudo descifrar la credencial segura del ERP (${decErr.message}).`);
+          continue;
         }
+      } else {
+        errors.push(`Comprobante ${exp.ncf || exp.id}: ERP_CREDENTIAL_MISSING - No existe una API key cifrada configurada para AllSender ERP.`);
+        continue;
       }
 
       try {

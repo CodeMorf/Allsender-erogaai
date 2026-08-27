@@ -195,6 +195,39 @@ export class PrismaRepository {
     }));
   }
 
+  get client(): PrismaClient {
+    return this.prisma;
+  }
+
+  // ----------------------------------------------------
+  // Companies & Branches
+  // ----------------------------------------------------
+  async getCompanies(orgId: string): Promise<Company[]> {
+    const list = await this.prisma.company.findMany({ where: { organization_id: orgId, is_active: true } });
+    return list.map(c => ({
+      id: c.id,
+      organization_id: c.organization_id,
+      name: c.name,
+      trade_name: c.trade_name || undefined,
+      rnc: c.rnc,
+      tax_regime: c.tax_regime as any,
+      address: c.address,
+      province: c.province,
+      municipality: c.municipality,
+      sector: c.sector || undefined,
+      phone: c.phone || undefined,
+      id_type: (c.id_type || 'RNC') as any,
+      timezone: c.timezone || 'America/Santo_Domingo',
+      currency: c.currency as any,
+      country: c.country,
+      is_main: c.is_main,
+      status: c.status as any,
+      is_active: c.is_active,
+      created_at: c.created_at.toISOString(),
+      updated_at: c.updated_at.toISOString()
+    }));
+  }
+
   // ----------------------------------------------------
   // Audit Logs (Immutable Append-Only)
   // ----------------------------------------------------
@@ -228,3 +261,5 @@ export class PrismaRepository {
     });
   }
 }
+
+export const prismaRepo = new PrismaRepository();

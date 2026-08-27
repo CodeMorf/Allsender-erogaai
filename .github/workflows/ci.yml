@@ -36,3 +36,17 @@ jobs:
 
       - name: Build Production Bundle
         run: npm run build
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E Integration Suite
+        run: |
+          node dist/server.cjs &
+          npx wait-on http://127.0.0.1:3000/api/health
+          npx playwright test
+        env:
+          PORT: 3000
+          NODE_ENV: test
+          JWT_SECRET: test_ci_secret_32_characters_long_1234
+          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

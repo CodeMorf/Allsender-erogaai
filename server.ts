@@ -1,6 +1,9 @@
 import express from 'express';
 import path from 'path';
 import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, officialApiScopes } from './server/db.ts';
 import { 
@@ -13,7 +16,8 @@ import {
   registerHandler, 
   loginHandler, 
   logoutHandler, 
-  forgotPasswordHandler 
+  forgotPasswordHandler,
+  resetPasswordHandler
 } from './server/auth.ts';
 import { authMiddleware, requestIdMiddleware, AuthenticatedRequest } from './server/middleware.ts';
 import { 
@@ -30,6 +34,25 @@ import { ExpenseRecord } from './src/types.ts';
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Security Headers & CORS
+  app.use(helmet({
+    contentSecurityPolicy: false, // Vite inline client scripts in dev
+    crossOriginEmbedderPolicy: false
+  }));
+  app.use(cors({
+    origin: true,
+    credentials: true
+  }));
+
+  // Rate Limiting for Auth
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Demasiadas solicitudes. Por favor espere unos minutos.' }
+  });
 
   // Cookie Parser & JSON Body Parser
   app.use(cookieParser());
@@ -110,10 +133,11 @@ async function startServer() {
     });
   });
 
-  app.post('/api/auth/register', registerHandler);
-  app.post('/api/auth/login', loginHandler);
+  app.post('/api/auth/register', authLimiter, registerHandler);
+  app.post('/api/auth/login', authLimiter, loginHandler);
   app.post('/api/auth/logout', logoutHandler);
-  app.post('/api/auth/forgot-password', forgotPasswordHandler);
+  app.post('/api/auth/forgot-password', authLimiter, forgotPasswordHandler);
+  app.post('/api/auth/reset-password', authLimiter, resetPasswordHandler);
 
   // --------------------------------------------------
   // PROTECTED API routes — require valid session cookie

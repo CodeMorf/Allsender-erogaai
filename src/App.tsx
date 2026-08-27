@@ -92,7 +92,7 @@ const AppRouter: React.FC = () => {
     }} />;
   }
 
-  const isTenantOnboardingDone = !!organization?.onboarding_done_at || organization?.onboarding_step === 7 || isOnboardingDismissed || localStorage.getItem('eroga_onboarding_done') === 'true';
+  const isTenantOnboardingDone = !!organization?.onboarding_done_at || (organization?.onboarding_step !== undefined && organization.onboarding_step >= 7) || isOnboardingDismissed;
 
   // If user is authenticated for the first time, show 7-step Onboarding Wizard
   if (!isTenantOnboardingDone) {
@@ -103,8 +103,7 @@ const AppRouter: React.FC = () => {
             await fetch('/api/organization/onboarding/complete', { method: 'POST' });
           } catch {}
           setIsOnboardingDismissed(true);
-          localStorage.setItem('eroga_onboarding_done', 'true');
-          fetchSession();
+          await fetchSession();
         }} 
       />
     );

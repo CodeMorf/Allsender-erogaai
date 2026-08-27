@@ -58,6 +58,8 @@ interface AppContextType {
   fetchBranches: (companyId?: string) => Promise<void>;
   saveBranch: (branch: Partial<Branch>) => Promise<{ branch?: Branch; error?: string }>;
   deactivateBranch: (branchId: string) => Promise<boolean>;
+  isImpersonating: boolean;
+  impersonatedOrg: Organization | null;
   
   // User & Roles (RBAC)
   currentUser: User | null;
@@ -185,6 +187,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentBranch, setCurrentBranch] = useState<Branch | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState<boolean>(false);
+  const [impersonatedOrg, setImpersonatedOrg] = useState<Organization | null>(null);
 
   // RBAC Roles & Permissions Matrix
   const [roles, setRoles] = useState<RoleDefinition[]>([]);
@@ -307,6 +311,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const data = JSON.parse(text);
           if (data && data.currentUser) {
             setCurrentUser(data.currentUser);
+            setIsImpersonating(Boolean(data.is_impersonating));
+            setImpersonatedOrg(data.impersonated_org || null);
             if (data.organization) {
               setOrganization(data.organization);
             }
@@ -319,6 +325,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setUsers(Array.isArray(data.users) ? data.users : []);
           } else {
             setCurrentUser(null);
+            setIsImpersonating(false);
+            setImpersonatedOrg(null);
           }
         } catch (parseErr) {
           console.warn('Session JSON parse error:', parseErr);
@@ -1443,6 +1451,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isMobileDrawerOpen,
         setIsMobileDrawerOpen,
         toggleMobileDrawer,
+        isImpersonating,
+        impersonatedOrg,
         toasts,
         showToast,
         removeToast

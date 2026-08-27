@@ -205,3 +205,42 @@ export async function forgotPasswordHandler(req: AuthenticatedRequest, res: Resp
 
   res.json({ message: 'Instrucciones para restablecer contraseña enviadas a su correo.' });
 }
+
+/**
+ * Reset Password Handler (Complete Flow)
+ */
+export async function resetPasswordHandler(req: AuthenticatedRequest, res: Response) {
+  try {
+    const { token, new_password } = req.body;
+    if (!token || !new_password) {
+      return res.status(400).json({ error: 'Token y nueva contraseña son obligatorios.' });
+    }
+
+    if (new_password.length < 8) {
+      return res.status(400).json({ error: 'La nueva contraseña debe contener al menos 8 caracteres.' });
+    }
+
+    const user = db.validatePasswordResetToken(token);
+    if (!user) {
+      return res.status(400).json({ error: 'El enlace de restablecimiento es inválido o ha expirado.' });
+    }
+
+    const passwordHash = await bcrypt.hash(new_password, 10);
+    db.updateUserPassword(user.id, passwordHash);
+    db.consumePasswordResetToken(token);
+
+    db.logAudit({
+      organization_id: user.organization_id,
+      user_id: user.id,
+      user_name: user.name,
+      action: 'ACTUALIZAR_USUARIO',
+      entity_type: 'USER',
+      entity_id: user.id,
+      details: 'Contraseña restablecida exitosamente mediante token de seguridad por correo.'
+    });
+
+    res.json({ success: true, message: 'Contraseña restablecida exitosamente. Ya puede iniciar sesión.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al restablecer contraseña: ' + err.message });
+  }
+}

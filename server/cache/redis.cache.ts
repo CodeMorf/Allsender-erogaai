@@ -1,3 +1,4 @@
+import { createRequire } from 'module';
 import { CacheService } from './cache.interface.ts';
 import { MemoryCacheService } from './memory.cache.ts';
 
@@ -7,20 +8,38 @@ export class RedisCacheService implements CacheService {
 
   constructor(redisUrl?: string) {
     this.fallbackMemory = new MemoryCacheService();
+    const isRequired = process.env.REDIS_REQUIRED === 'true';
+
     try {
-      const getModule = typeof require !== 'undefined' ? require : null;
-      const Redis = getModule ? getModule('ioredis') : null;
-      if (Redis) {
+      let RedisModule: any = null;
+      try {
+        const _require = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
+        RedisModule = _require('ioredis');
+      } catch {
+        RedisModule = null;
+      }
+
+      if (RedisModule) {
+        const Redis = RedisModule.default || RedisModule;
         this.redis = new Redis(redisUrl || process.env.REDIS_URL || 'redis://localhost:6379', {
           maxRetriesPerRequest: 1,
           lazyConnect: true
         });
         this.redis.connect().catch((err: any) => {
+          if (isRequired) {
+            console.error('FATAL: REDIS_REQUIRED=true but connection failed:', err.message);
+            throw new Error(`REDIS_CONNECTION_FAILED: ${err.message}`);
+          }
           console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
           this.redis = null;
         });
+      } else if (isRequired) {
+        throw new Error('REDIS_REQUIRED=true but ioredis driver is not available');
       }
-    } catch {
+    } catch (err: any) {
+      if (isRequired) {
+        throw err;
+      }
       this.redis = null;
     }
   }

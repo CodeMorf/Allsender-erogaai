@@ -17,7 +17,10 @@
     "db:seed": "prisma db seed",
     "db:postgres:generate": "prisma generate --schema=prisma/schema.postgresql.prisma",
     "db:postgres:push": "prisma db push --schema=prisma/schema.postgresql.prisma",
-    "migrate:json-to-sql": "tsx scripts/migrate-json-to-sql.ts"
+    "db:postgres:migrate": "prisma migrate deploy --schema=prisma/schema.postgresql.prisma",
+    "db:postgres:deploy": "prisma migrate deploy --schema=prisma/schema.postgresql.prisma",
+    "migrate:json-to-sql": "tsx scripts/migrate-json-to-sql.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@capacitor/camera": "^8.2.3",

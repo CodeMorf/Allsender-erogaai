@@ -544,6 +544,43 @@ export class CodeMorfAIProvider implements AIProvider {
   }
 
   async extractReceiptData(image: ReceiptImage): Promise<ReceiptExtraction> {
+    const startTime = Date.now();
+    try {
+      if (this.apiUrl && this.apiUrl.startsWith('http')) {
+        const payload = {
+          image_base64: image.base64Data,
+          mime_type: image.mimeType || 'image/jpeg',
+          model: this.model,
+          organization_id: this.orgId
+        };
+        const res = await fetch(`${this.apiUrl}/ocr/extract`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {})
+          },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const ext: ReceiptExtraction = data.extraction || data;
+          db.logAIUsage({
+            organization_id: this.orgId,
+            provider_type: 'CODEMORF',
+            model: this.model,
+            action: 'EXTRACT_RECEIPT',
+            tokens_prompt: data.usage?.prompt_tokens || 900,
+            tokens_completion: data.usage?.completion_tokens || 250,
+            duration_ms: Date.now() - startTime,
+            status: 'SUCCESS'
+          });
+          return ext;
+        }
+      }
+    } catch (err: any) {
+      console.warn('[CodeMorf AI] Gateway call unreachable, using local fallback:', err.message);
+    }
+
     const geminiEngine = new GeminiAIProvider(this.apiKey || process.env.GEMINI_API_KEY || '', 'gemini-2.5-flash', this.orgId);
     return await geminiEngine.extractReceiptData(image);
   }

@@ -2293,6 +2293,30 @@ export class ErogaAIDatabase {
     this.aiUsageLogs.unshift(newLog);
     return newLog;
   }
+
+  validatePasswordResetToken(token: string): User | null {
+    const item = this.passwordResetTokens.get(token);
+    if (!item) return null;
+    if (new Date() > new Date(item.expires_at)) {
+      this.passwordResetTokens.delete(token);
+      return null;
+    }
+    const user = this.users.find(u => u.id === item.user_id);
+    return user || null;
+  }
+
+  consumePasswordResetToken(token: string): void {
+    this.passwordResetTokens.delete(token);
+  }
+
+  updateUserPassword(userId: string, passwordHash: string): boolean {
+    const user = this.users.find(u => u.id === userId);
+    if (!user) return false;
+    user.password_hash = passwordHash;
+    user.updated_at = new Date().toISOString();
+    this.saveToDisk();
+    return true;
+  }
 }
 
 export const db = new ErogaAIDatabase();

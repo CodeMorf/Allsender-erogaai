@@ -3,20 +3,17 @@ import { AlertTriangle, LogOut } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 
 export const ImpersonationBanner: React.FC = () => {
-  const { organization, showToast, currentUser } = useApp();
-  const isPlatformAdmin = currentUser?.platform_role === 'SUPER_ADMIN' || currentUser?.platform_role === 'PLATFORM_ADMIN';
-  const isCookieSet = typeof document !== 'undefined' && document.cookie.includes('eroga_impersonate_org');
-  const isImpersonating = (isCookieSet || !!localStorage.getItem('eroga_impersonating_org_id')) && isPlatformAdmin;
-  const impersonatedOrgName = organization?.name || localStorage.getItem('eroga_impersonating_org_name') || 'Organización Inquilina';
+  const { isImpersonating, impersonatedOrg, organization, showToast, fetchSession } = useApp();
 
   if (!isImpersonating) return null;
+
+  const orgName = impersonatedOrg?.name || organization?.name || 'Organización Inquilina';
 
   const handleStopImpersonation = async () => {
     try {
       await fetch('/api/platform/impersonation/stop', { method: 'POST' });
-      localStorage.removeItem('eroga_impersonating_org_id');
-      localStorage.removeItem('eroga_impersonating_org_name');
       showToast('info', 'Impersonación Finalizada', 'Has regresado al Portal SuperAdmin.');
+      await fetchSession();
       window.location.href = '/super-admin';
     } catch {
       window.location.href = '/super-admin';
@@ -28,7 +25,7 @@ export const ImpersonationBanner: React.FC = () => {
       <div className="flex items-center gap-2">
         <AlertTriangle className="w-4 h-4 text-slate-950 shrink-0 animate-pulse" />
         <span>
-          ⚠️ MODO SOPORTE: Estás administrando la organización <span className="underline">{impersonatedOrgName}</span> como Super Admin.
+          ⚠️ MODO SOPORTE: Estás administrando la organización <span className="underline">{orgName}</span> como Super Admin.
         </span>
       </div>
       <button
