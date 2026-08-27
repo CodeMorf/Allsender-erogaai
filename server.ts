@@ -200,40 +200,6 @@ async function startServer() {
   });
 
   // --------------------------------------------------
-  // Session & Authenticated User Info (public — no auth guard)
-  // --------------------------------------------------
-  app.get('/api/session', asyncRoute(async (req, res) => {
-    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
-      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
-    }
-    const sessionData = await prismaRepo.validateSessionToken(token);
-    if (!sessionData || !sessionData.user) {
-      res.clearCookie('eroga_session');
-      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
-    }
-    const orgId = sessionData.organization_id;
-    res.json({
-      organization: await prismaRepo.getOrganizationById(orgId),
-      companies: await prismaRepo.getCompanies(orgId),
-      branches: await prismaRepo.getBranches(orgId),
-      users: await prismaRepo.getUsers(orgId),
-      currentUser: sessionData.user
-    });
-  }));
-
-  app.get('/api/auth/me', asyncRoute(async (req, res) => {
-    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.json({ user: null, organization: null });
-    const sessionData = await prismaRepo.validateSessionToken(token);
-    if (!sessionData || !sessionData.user) {
-      res.clearCookie('eroga_session');
-      return res.json({ user: null, organization: null });
-    }
-    res.json({ user: sessionData.user, organization: await prismaRepo.getOrganizationById(sessionData.organization_id) });
-  }));
-
-  // --------------------------------------------------
   // Platform & SuperAdmin Routes (Strict SUPER_ADMIN verification)
   // --------------------------------------------------
   app.get('/api/organizations', platformAdminMiddleware, asyncRoute(async (req: AuthenticatedRequest, res) => {

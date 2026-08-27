@@ -85,6 +85,10 @@ Este proyecto ha sido concebido, diseñado e implementado por **CodeMorf**:
    ```
    Abre [http://localhost:3000](http://localhost:3000) en tu navegador.
 
+### Smoke de integraciones externas en staging
+
+El smoke real de AI y ERP es manual y solo debe ejecutarse contra un entorno de staging controlado. No guarda credenciales en el repositorio ni se ejecuta en el CI normal. Configure los secretos `E2E_SMOKE_*` en el Environment `staging` de GitHub y ejecute manualmente el workflow **ErogaAI External Integration Smoke**. El proveedor AI se prueba mediante su conexión real; el ERP se valida con el health endpoint seguro que indique el operador, sin iniciar una sincronización de comprobantes.
+
 ---
 
 ## 📄 Licencia y Créditos

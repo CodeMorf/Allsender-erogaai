@@ -20,7 +20,8 @@
     "db:postgres:migrate": "prisma migrate deploy --schema=prisma/schema.postgresql.prisma",
     "db:postgres:deploy": "prisma migrate deploy --schema=prisma/schema.postgresql.prisma",
     "migrate:json-to-sql": "tsx scripts/migrate-json-to-sql.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "smoke:external": "tsx scripts/external-smoke.ts"
   },
   "dependencies": {
     "@capacitor/camera": "^8.2.3",

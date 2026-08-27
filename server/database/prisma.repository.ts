@@ -1199,6 +1199,14 @@ export class PrismaRepository {
     return result.count > 0;
   }
 
+  async revokeAllUserSessions(userId: string): Promise<number> {
+    const result = await this.prisma.session.updateMany({
+      where: { user_id: userId, revoked_at: null },
+      data: { revoked_at: nowDate() }
+    });
+    return result.count;
+  }
+
   async generatePasswordResetToken(userId: string): Promise<string> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new RepositoryError('Usuario no encontrado.', 404, 'USER_NOT_FOUND');
@@ -1211,6 +1219,33 @@ export class PrismaRepository {
     const reset = await this.prisma.passwordResetToken.findUnique({ where: { token_hash: tokenHash(token) }, include: { user: true } });
     if (!reset || reset.used_at || reset.expires_at <= nowDate() || !reset.user.is_active) return null;
     return this.toUser(reset.user);
+  }
+
+  async resetPasswordWithToken(token: string, passwordHash: string): Promise<User | null> {
+    if (!passwordHash.startsWith('$2')) throw new RepositoryError('La contraseña debe ser un hash bcrypt.', 400, 'PASSWORD_HASH_REQUIRED');
+    const now = nowDate();
+    return this.prisma.$transaction(async tx => {
+      const reset = await tx.passwordResetToken.findUnique({ where: { token_hash: tokenHash(token) } });
+      if (!reset || reset.used_at || reset.expires_at <= now) return null;
+
+      const user = await tx.user.findUnique({ where: { id: reset.user_id } });
+      if (!user || !user.is_active) return null;
+
+      const consumed = await tx.passwordResetToken.updateMany({
+        where: { id: reset.id, used_at: null },
+        data: { used_at: now }
+      });
+      if (consumed.count === 0) return null;
+
+      const updated = await tx.user.updateMany({
+        where: { id: user.id, is_active: true },
+        data: { password_hash: passwordHash }
+      });
+      if (updated.count === 0) throw new RepositoryError('El usuario del enlace ya no está disponible.', 400, 'RESET_USER_UNAVAILABLE');
+
+      await tx.session.updateMany({ where: { user_id: user.id, revoked_at: null }, data: { revoked_at: now } });
+      return this.toUser({ ...user, password_hash: passwordHash });
+    });
   }
 
   async consumePasswordResetToken(token: string): Promise<void> {

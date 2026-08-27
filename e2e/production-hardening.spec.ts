@@ -32,6 +32,12 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
   const employeeContext = await playwrightRequest.newContext({ baseURL: baseUrl });
 
   try {
+    const readyResponse = await tenantAContext.get('/api/ready');
+    expect(readyResponse.status()).toBe(200);
+    const readyData = await readyResponse.json();
+    expect(readyData.postgres).toBe('ok');
+    if (process.env.REDIS_REQUIRED === 'true') expect(readyData.redis).toBe('ok');
+
     const tenantAPassword = randomSecret('TenantA');
     const tenantAEmail = `${randomSecret('tenant_a').toLowerCase()}@example.com`;
     const tenantARegistration = await tenantAContext.post('/api/auth/register', {
@@ -138,6 +144,7 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     const resetToken = await prismaRepo.generatePasswordResetToken(employeeId);
     const resetPassword = randomSecret('Reset');
     expect((await employeeContext.post('/api/auth/reset-password', { data: { token: resetToken, new_password: resetPassword } })).status()).toBe(200);
+    expect((await employeeContext.get('/api/users')).status()).toBe(401);
     expect((await employeeContext.post('/api/auth/reset-password', { data: { token: resetToken, new_password: randomSecret('Replay') } })).status()).toBe(400);
 
     // Platform SuperAdmin and server-side impersonation are SQL-authoritative.

@@ -209,17 +209,9 @@ export async function resetPasswordHandler(req: AuthenticatedRequest, res: Respo
       return res.status(400).json({ error: 'La nueva contraseña debe contener al menos 8 caracteres.' });
     }
 
-    const user = await prismaRepo.validatePasswordResetToken(token);
-    if (!user) {
-      return res.status(400).json({ error: 'El enlace de restablecimiento es inválido o ha expirado.' });
-    }
-
     const passwordHash = await bcrypt.hash(new_password, 10);
-    const passwordUpdated = await prismaRepo.updateUserPassword(user.id, passwordHash);
-    if (!passwordUpdated) {
-      return res.status(400).json({ error: 'El usuario del enlace ya no está disponible.' });
-    }
-    await prismaRepo.consumePasswordResetToken(token);
+    const user = await prismaRepo.resetPasswordWithToken(token, passwordHash);
+    if (!user) return res.status(400).json({ error: 'El enlace de restablecimiento es inválido o ha expirado.' });
 
     await prismaRepo.logAudit({
       organization_id: user.organization_id,
