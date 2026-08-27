@@ -40,6 +40,7 @@ export class RedisCacheService implements CacheService {
           if (!isRequired) {
             console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
             this.redis = null;
+            return undefined;
           }
           throw new Error(`REDIS_CONNECTION_FAILED: ${err.message}`);
         });
