@@ -51,6 +51,20 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
   req.user_name = sessionData.user.name;
   req.user_email = sessionData.user.email;
 
+  // Server-Side Impersonation: ONLY permitted for platform SUPER_ADMIN / PLATFORM_ADMIN
+  const impersonateOrgCookie = req.cookies?.eroga_impersonate_org;
+  const isPlatformSuperAdmin = sessionData.user.platform_role === 'SUPER_ADMIN' || sessionData.user.platform_role === 'PLATFORM_ADMIN';
+
+  if (impersonateOrgCookie && isPlatformSuperAdmin) {
+    const targetOrg = db.getOrganizationById(impersonateOrgCookie);
+    if (targetOrg && targetOrg.is_active) {
+      req.organization_id = targetOrg.id;
+      // Mark as impersonated in request context
+      (req as any).is_impersonating = true;
+      (req as any).impersonated_org_name = targetOrg.name;
+    }
+  }
+
   next();
 }
 

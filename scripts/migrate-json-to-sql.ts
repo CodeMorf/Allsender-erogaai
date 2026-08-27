@@ -191,12 +191,119 @@ async function migrateJsonToSql() {
       }
     }
 
+    // 6. Categories
+    const categoriesList = data.categories || data.expense_categories || [];
+    if (Array.isArray(categoriesList)) {
+      for (const cat of categoriesList) {
+        try {
+          await prisma.expenseCategory.upsert({
+            where: { id: cat.id },
+            update: {},
+            create: {
+              id: cat.id,
+              organization_id: cat.organization_id || 'org_allsender_corp',
+              name: cat.name,
+              code: cat.code || 'CAT-01',
+              account_code: cat.account_code || '6105-01-000',
+              dgii_type_code: cat.dgii_expense_type || cat.dgii_type_code || '02',
+              is_active: cat.is_active ?? true
+            }
+          });
+          stats.categories++;
+        } catch {
+          stats.skipped++;
+        }
+      }
+    }
+
+    // 7. Suppliers
+    const suppliersList = data.suppliers || [];
+    if (Array.isArray(suppliersList)) {
+      for (const sup of suppliersList) {
+        try {
+          await prisma.supplier.upsert({
+            where: { id: sup.id },
+            update: {},
+            create: {
+              id: sup.id,
+              organization_id: sup.organization_id || 'org_allsender_corp',
+              name: sup.name,
+              rnc: sup.rnc,
+              trade_name: sup.trade_name,
+              category_default: sup.category || sup.category_default || 'General',
+              phone: sup.phone,
+              email: sup.email,
+              status_dgii: 'ACTIVO'
+            }
+          });
+          stats.suppliers++;
+        } catch {
+          stats.skipped++;
+        }
+      }
+    }
+
+    // 8. Cost Centers
+    const costCentersList = data.costCenters || data.cost_centers || [];
+    if (Array.isArray(costCentersList)) {
+      for (const cc of costCentersList) {
+        try {
+          await prisma.costCenter.upsert({
+            where: { id: cc.id },
+            update: {},
+            create: {
+              id: cc.id,
+              organization_id: cc.organization_id || 'org_allsender_corp',
+              name: cc.name,
+              code: cc.code || 'CC-01',
+              budget_monthly: cc.budget || cc.budget_monthly || 0
+            }
+          });
+          stats.costCenters++;
+        } catch {
+          stats.skipped++;
+        }
+      }
+    }
+
+    // 9. AI Providers
+    const aiProvidersList = data.aiProviders || data.ai_providers || [];
+    if (Array.isArray(aiProvidersList)) {
+      for (const ai of aiProvidersList) {
+        try {
+          await prisma.aIProviderConfig.upsert({
+            where: { id: ai.id },
+            update: {},
+            create: {
+              id: ai.id,
+              organization_id: ai.organization_id || 'org_allsender_corp',
+              name: ai.name || 'Motor IA',
+              provider_type: ai.provider_type || 'GEMINI',
+              masked_key: ai.masked_key || 'AIza...****',
+              selected_model: ai.selected_model || 'gemini-2.5-flash',
+              available_models: JSON.stringify(ai.available_models || ['gemini-2.5-flash']),
+              is_active: ai.is_active ?? true,
+              is_primary: ai.is_primary ?? false,
+              status: ai.status || 'ONLINE'
+            }
+          });
+          stats.aiProviders++;
+        } catch {
+          stats.skipped++;
+        }
+      }
+    }
+
     console.log('=== Resumen Final de Migración SQL ===');
     console.log(`Organizaciones: ${stats.organizations} importadas`);
     console.log(`Empresas: ${stats.companies} importadas`);
     console.log(`Sucursales: ${stats.branches} importadas`);
     console.log(`Usuarios: ${stats.users} importados`);
     console.log(`Erogaciones: ${stats.expenses} importadas`);
+    console.log(`Categorías: ${stats.categories} importadas`);
+    console.log(`Proveedores: ${stats.suppliers} importados`);
+    console.log(`Centros de Costo: ${stats.costCenters} importados`);
+    console.log(`Motores IA: ${stats.aiProviders} importados`);
     console.log(`Duplicados/Omitidos: ${stats.skipped}`);
     console.log(`Errores: ${stats.errors}`);
   } catch (err: any) {

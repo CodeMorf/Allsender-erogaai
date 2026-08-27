@@ -4,12 +4,13 @@ import { db } from '../db.ts';
 
 /**
  * Ensures user possesses Platform Role (SUPER_ADMIN or PLATFORM_ADMIN)
+ * Strictest security check — organization role ADMIN is NEVER permitted platform access.
  */
 export function platformAdminMiddleware(req: AuthenticatedRequest, res: Response, next: any) {
   const user = db.findUserByEmail(req.user_email || '');
-  if (!user || (user.platform_role !== 'SUPER_ADMIN' && user.platform_role !== 'PLATFORM_ADMIN' && req.user_role !== 'ADMIN')) {
+  if (!user || (user.platform_role !== 'SUPER_ADMIN' && user.platform_role !== 'PLATFORM_ADMIN')) {
     return res.status(403).json({ 
-      error: 'Acceso denegado: Se requieren permisos de SuperAdmin de Plataforma', 
+      error: 'Acceso denegado: Se requieren permisos exclusivos de SuperAdmin de Plataforma', 
       code: 'PLATFORM_FORBIDDEN' 
     });
   }
@@ -37,7 +38,7 @@ export async function getTenantsHandler(req: AuthenticatedRequest, res: Response
 }
 
 /**
- * Impersonate Tenant Organization
+ * Impersonate Tenant Organization — Server-Side Cookie Session
  */
 export async function startImpersonationHandler(req: AuthenticatedRequest, res: Response) {
   const { organizationId } = req.params;
@@ -47,6 +48,14 @@ export async function startImpersonationHandler(req: AuthenticatedRequest, res: 
     return res.status(404).json({ error: 'Organización inquilina no encontrada' });
   }
 
+  // Set secure HttpOnly impersonation cookie verified by server
+  res.cookie('eroga_impersonate_org', targetOrg.id, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 4 * 60 * 60 * 1000 // 4 hours max impersonation window
+  });
+
   db.logAudit({
     organization_id: targetOrg.id,
     user_id: req.user_id || 'usr_superadmin',
@@ -55,7 +64,7 @@ export async function startImpersonationHandler(req: AuthenticatedRequest, res: 
     action: 'IMPERSONATE_ORGANIZATION',
     entity_type: 'ORGANIZATION',
     entity_id: targetOrg.id,
-    details: `SuperAdmin inició impersonación en la organización "${targetOrg.name}" (RNC: ${targetOrg.rnc}).`
+    details: `SuperAdmin (${req.user_email}) inició impersonación de servidor en "${targetOrg.name}" (RNC: ${targetOrg.rnc}).`
   });
 
   res.json({
@@ -66,8 +75,10 @@ export async function startImpersonationHandler(req: AuthenticatedRequest, res: 
 }
 
 /**
- * Stop Impersonation
+ * Stop Impersonation — Clear Server-Side Cookie
  */
 export async function stopImpersonationHandler(req: AuthenticatedRequest, res: Response) {
-  res.json({ success: true, message: 'Impersonación finalizada.' });
+  res.clearCookie('eroga_impersonate_org');
+  res.json({ success: true, message: 'Impersonación finalizada exitosamente.' });
 }
+

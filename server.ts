@@ -16,6 +16,15 @@ import {
   forgotPasswordHandler 
 } from './server/auth.ts';
 import { authMiddleware, requestIdMiddleware, AuthenticatedRequest } from './server/middleware.ts';
+import { 
+  getTenantsHandler, 
+  startImpersonationHandler, 
+  stopImpersonationHandler, 
+  platformAdminMiddleware 
+} from './server/routes/platform.ts';
+import { generateExpensesPDF } from './server/reports-pdf.ts';
+import { generateExpensesXLSX } from './server/reports-excel.ts';
+import { syncExpensesToAllSenderERP } from './server/erp-client.ts';
 import { ExpenseRecord } from './src/types.ts';
 
 async function startServer() {
@@ -137,16 +146,20 @@ async function startServer() {
   });
 
   // --------------------------------------------------
-  // Organizations (platform admin only — guarded by authMiddleware above)
+  // Platform & SuperAdmin Routes (Strict SUPER_ADMIN verification)
   // --------------------------------------------------
-  app.get('/api/organizations', (req: AuthenticatedRequest, res) => {
+  app.get('/api/organizations', platformAdminMiddleware, (req: AuthenticatedRequest, res) => {
     res.json({ organizations: db.getOrganizations() });
   });
 
-  app.post('/api/organizations', (req: AuthenticatedRequest, res) => {
+  app.post('/api/organizations', platformAdminMiddleware, (req: AuthenticatedRequest, res) => {
     const org = db.saveOrganization(req.body);
     res.status(201).json(org);
   });
+
+  app.get('/api/platform/tenants', platformAdminMiddleware, getTenantsHandler);
+  app.post('/api/platform/impersonation/:organizationId/start', platformAdminMiddleware, startImpersonationHandler);
+  app.post('/api/platform/impersonation/stop', platformAdminMiddleware, stopImpersonationHandler);
 
   // --------------------------------------------------
   // Users & Team Management (Gestión de Equipo)
@@ -170,7 +183,7 @@ async function startServer() {
   });
 
   app.put('/api/users/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -218,7 +231,7 @@ async function startServer() {
   });
 
   app.put('/api/rbac/roles/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -256,7 +269,7 @@ async function startServer() {
   });
 
   app.post('/api/rbac/matrix/reset', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -286,7 +299,7 @@ async function startServer() {
   });
 
   app.put('/api/companies/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -330,7 +343,7 @@ async function startServer() {
   });
 
   app.put('/api/branches/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -382,7 +395,7 @@ async function startServer() {
   });
 
   app.post('/api/api-keys/:id/regenerate', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const userId = (req as AuthenticatedRequest).user_id!;
     const userName = (req as AuthenticatedRequest).user_name!;
 
@@ -398,7 +411,7 @@ async function startServer() {
   });
 
   app.patch('/api/api-keys/:id/status', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const { is_active } = req.body;
     const result = db.updateApiKeyStatus(orgId, req.params.id, Boolean(is_active));
     if (!result.success) return res.status(404).json({ error: 'API Key no encontrada' });
@@ -561,13 +574,13 @@ async function startServer() {
   });
 
   app.put('/api/expenses/:id', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const updated = db.saveExpense(orgId, { ...req.body, id: req.params.id });
     res.json(updated);
   });
 
   app.patch('/api/expenses/:id/status', (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const { status, notes, reviewer_name, correction_note } = req.body;
     
     const updated = db.saveExpense(orgId, {
@@ -676,18 +689,17 @@ async function startServer() {
   });
 
   app.post('/api/ai/providers/:id/test', async (req, res) => {
-    const orgId = (req.body.organization_id as string) || (req as AuthenticatedRequest).organization_id!;
+    const orgId = (req as AuthenticatedRequest).organization_id!;
     const config = db.getAIProviderById(orgId, req.params.id);
     if (!config) return res.status(404).json({ error: 'Provider configuration not found' });
 
     try {
       const startTime = Date.now();
       const provider = getAIProviderInstance(orgId, config.provider_type);
-      const isOnline = await provider.testConnection();
-      const latencyMs = Date.now() - startTime;
-      
-      const status = isOnline ? 'ONLINE' : 'ONLINE';
-      const msg = `Conexión exitosa con ${config.name} (${config.selected_model}) - Latencia: ${latencyMs}ms`;
+      const testRes = await provider.testConnection();
+      const latencyMs = testRes.latency_ms || (Date.now() - startTime);
+      const status: 'ONLINE' | 'OFFLINE' | 'ERROR' | 'UNTESTED' = testRes.status === 'ONLINE' ? 'ONLINE' : 'OFFLINE';
+      const msg = testRes.message;
 
       const updated = db.saveAIProvider(orgId, {
         id: config.id,
@@ -697,9 +709,17 @@ async function startServer() {
         last_used_at: new Date().toISOString()
       });
 
-      res.json({ success: true, status, message: msg, latency_ms: latencyMs, provider: updated });
+      res.json({ success: status === 'ONLINE', status, message: msg, latency_ms: latencyMs, provider: updated });
     } catch (error: any) {
-      res.json({ success: true, status: 'ONLINE', message: `Conexión verificada con ${config.name} (${config.selected_model})`, provider: config });
+      const msg = `Fallo de conexión con ${config.name}: ${error.message}`;
+      const updated = db.saveAIProvider(orgId, {
+        id: config.id,
+        provider_type: config.provider_type,
+        status: 'OFFLINE',
+        last_test_message: msg,
+        last_used_at: new Date().toISOString()
+      });
+      res.status(502).json({ success: false, status: 'OFFLINE', message: msg, provider: updated });
     }
   });
 
@@ -752,11 +772,78 @@ async function startServer() {
     });
   });
 
+  // DGII 606 PDF Export Route
+  app.get(['/api/reports/dgii-606/pdf', '/api/reports/expenses/pdf'], async (req, res) => {
+    try {
+      const orgId = (req as AuthenticatedRequest).organization_id!;
+      const org = db.getOrganizationById(orgId);
+      if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+      
+      const companyId = req.query.company_id as string;
+      const company = companyId ? db.getCompanies(orgId).find(c => c.id === companyId) : undefined;
+      const branchId = req.query.branch_id as string;
+      const branch = branchId ? db.getBranches(orgId).find(b => b.id === branchId) : undefined;
+      
+      const expenses = db.getExpenses(orgId, { company_id: companyId, branch_id: branchId });
+      const pdfBuffer = await generateExpensesPDF({
+        organization: org,
+        company,
+        branch,
+        title: 'Reporte de Erogaciones & Comprobantes Fiscales DGII',
+        subtitle: `Período Fiscal: ${new Date().toISOString().substring(0, 7)}`,
+        expenses,
+        generatedBy: (req as AuthenticatedRequest).user_name
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="ErogaAI_Reporte_${org.rnc}_${Date.now()}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Error generando PDF: ' + err.message });
+    }
+  });
+
+  // DGII 606 Excel (.xlsx) Export Route
+  app.get(['/api/reports/dgii-606/excel', '/api/reports/dgii-606/xlsx', '/api/reports/expenses/excel'], async (req, res) => {
+    try {
+      const orgId = (req as AuthenticatedRequest).organization_id!;
+      const org = db.getOrganizationById(orgId);
+      if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+
+      const companyId = req.query.company_id as string;
+      const company = companyId ? db.getCompanies(orgId).find(c => c.id === companyId) : undefined;
+      const expenses = db.getExpenses(orgId, { company_id: companyId });
+
+      const xlsxBuffer = await generateExpensesXLSX({
+        organization: org,
+        company,
+        period: new Date().toISOString().substring(0, 7),
+        expenses,
+        generatedBy: (req as AuthenticatedRequest).user_name
+      });
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="ErogaAI_DGII_606_${org.rnc}_${Date.now()}.xlsx"`);
+      res.send(xlsxBuffer);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Error generando Excel: ' + err.message });
+    }
+  });
+
   // AllSender ERP Sync API
-  app.post('/api/all-sender/sync', (req, res) => {
+  app.post('/api/all-sender/sync', async (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const expenseIds = req.body.expenseIds || req.body.expense_ids;
-    
+    const config = db.getERPConfig(orgId);
+
+    if (!config || !config.is_enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'ERP_DISABLED: El conector AllSender ERP no está habilitado para esta organización.',
+        synced_count: 0
+      });
+    }
+
     let targetExpenses = db.getExpenses(orgId);
     if (Array.isArray(expenseIds) && expenseIds.length > 0) {
       targetExpenses = targetExpenses.filter(e => expenseIds.includes(e.id));
@@ -764,26 +851,22 @@ async function startServer() {
       targetExpenses = targetExpenses.filter(e => e.status === 'APROBADO');
     }
 
-    const syncBatchId = `AS-ERP-SYNC-${Math.floor(10000 + Math.random() * 90000)}`;
-    const timestamp = new Date().toISOString();
-
-    const synced = targetExpenses.map(exp => {
-      return db.saveExpense(orgId, {
-        id: exp.id,
-        status: 'SINCRONIZADO_ERP',
-        all_sender_sync_id: syncBatchId,
-        all_sender_synced_at: timestamp
-      });
-    });
+    const syncResult = await syncExpensesToAllSenderERP(orgId, config, targetExpenses);
+    
+    // Save updated synced records back into DB
+    for (const exp of syncResult.synced_expenses) {
+      db.saveExpense(orgId, exp);
+    }
 
     res.json({
-      success: true,
-      sync_batch_id: syncBatchId,
-      synced_count: synced.length,
-      syncedCount: synced.length,
-      syncedAt: timestamp,
-      erp_endpoint: 'https://api.allsender.app/v1/erogaciones/import-batch',
-      message: `${synced.length} comprobantes sincronizados exitosamente con AllSender ERP.`
+      success: syncResult.success,
+      synced_count: syncResult.synced_count,
+      failed_count: syncResult.failed_count,
+      errors: syncResult.errors,
+      erp_endpoint: config.api_endpoint || 'https://api.allsender.app/v1/erogaciones/import-batch',
+      message: syncResult.success
+        ? `${syncResult.synced_count} comprobantes sincronizados exitosamente con AllSender ERP.`
+        : `Sincronización finalizada con ${syncResult.failed_count} incidencias.`
     });
   });
 

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext.js';
 import { useTheme } from '../context/ThemeContext.js';
 import { usePWA } from '../context/PWAContext.js';
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
+  const navigate = useNavigate();
   const { 
     portal,
     setPortal,
@@ -229,6 +231,7 @@ export const Navbar: React.FC = () => {
                   onClick={() => {
                     setPortal('company');
                     setIsUserMenuOpen(false);
+                    navigate('/company/dashboard');
                   }}
                   className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between font-semibold transition-all ${
                     portal === 'company' 
@@ -249,6 +252,7 @@ export const Navbar: React.FC = () => {
                     onClick={() => {
                       setPortal('super-admin');
                       setIsUserMenuOpen(false);
+                      navigate('/super-admin');
                     }}
                     className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between font-semibold transition-all ${
                       portal === 'super-admin' 

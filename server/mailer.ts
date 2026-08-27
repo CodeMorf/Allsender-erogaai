@@ -27,18 +27,7 @@ function createTransporter(settings?: EmailSettings | null) {
   const pass = settings?.encrypted_pass || process.env.SMTP_PASSWORD;
 
   if (!host || !user) {
-    // Development JSON / Log transport fallback if SMTP is unconfigured
-    return {
-      sendMail: async (mailOptions: any) => {
-        console.log('[Mailer] Simulated Email Send (SMTP Unconfigured):', {
-          to: mailOptions.to,
-          subject: mailOptions.subject,
-          attachmentsCount: mailOptions.attachments?.length || 0
-        });
-        return { messageId: `msg_sim_${Date.now()}` };
-      },
-      verify: async () => true
-    };
+    return null;
   }
 
   return nodemailer.createTransport({
@@ -58,6 +47,12 @@ function createTransporter(settings?: EmailSettings | null) {
 export async function testSMTPConnection(settings?: EmailSettings | null): Promise<{ success: boolean; message: string }> {
   try {
     const transporter = createTransporter(settings);
+    if (!transporter) {
+      return {
+        success: false,
+        message: 'SMTP_NOT_CONFIGURED: Debe especificar Servidor SMTP (Host), Usuario y Contraseña.'
+      };
+    }
     await transporter.verify();
     return {
       success: true,
@@ -78,6 +73,12 @@ export async function testSMTPConnection(settings?: EmailSettings | null): Promi
 export async function sendEmail(options: SendEmailOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const transporter = createTransporter(options.settings);
+    if (!transporter) {
+      return {
+        success: false,
+        error: 'SMTP_NOT_CONFIGURED: No se ha configurado un servidor SMTP válido para este inquilino.'
+      };
+    }
 
     const fromName = options.settings?.smtp_from_name || process.env.SMTP_FROM_NAME || 'ErogaAI SaaS Platform';
     const fromEmail = options.settings?.smtp_from || process.env.SMTP_FROM || 'no-reply@erogaai.com';

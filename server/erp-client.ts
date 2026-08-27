@@ -48,6 +48,13 @@ export async function syncExpensesToAllSenderERP(
     try {
       const idempotencyKey = exp.idempotency_key || `idemp_erp_${exp.id}_${exp.updated_at}`;
 
+      if (!config.api_endpoint || !config.api_endpoint.startsWith('http')) {
+        exp.erp_sync_status = 'ERROR_SYNC';
+        exp.erp_sync_error = 'ENDPOINT_NO_CONFIGURADO: Debe configurar la URL de API de AllSender ERP.';
+        errors.push(`Comprobante NCF ${exp.ncf}: URL de endpoint ERP no configurada.`);
+        continue;
+      }
+
       // Build external ERP payload
       const payload = {
         organization_id: orgId,
@@ -66,36 +73,32 @@ export async function syncExpensesToAllSenderERP(
       let erpSyncId = `as_inv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
       let isSuccess = true;
 
-      // If real HTTP endpoint is provided, execute external request
-      if (config.api_endpoint && config.api_endpoint.startsWith('http')) {
-        try {
-          const res = await fetch(config.api_endpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${config.api_key_masked}`,
-              'Idempotency-Key': idempotencyKey,
-              'X-ErogaAI-Org': orgId
-            },
-            body: JSON.stringify(payload)
-          });
+      try {
+        const res = await fetch(config.api_endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.api_key_masked}`,
+            'Idempotency-Key': idempotencyKey,
+            'X-ErogaAI-Org': orgId
+          },
+          body: JSON.stringify(payload)
+        });
 
-          if (!res.ok) {
-            isSuccess = false;
-            const errorText = await res.text();
-            throw new Error(`ERP returned HTTP ${res.status}: ${errorText.substring(0, 100)}`);
-          }
-
-          const responseData = await res.json().catch(() => ({}));
-          erpSyncId = responseData.sync_id || erpSyncId;
-        } catch (fetchErr: any) {
-          // If external ERP endpoint fails, record state transition cleanly
+        if (!res.ok) {
           isSuccess = false;
-          exp.erp_sync_status = 'ERROR_SYNC';
-          exp.erp_sync_error = fetchErr.message || 'Error de conexión HTTP con AllSender ERP';
-          errors.push(`Comprobante NCF ${exp.ncf}: ${exp.erp_sync_error}`);
-          continue;
+          const errorText = await res.text();
+          throw new Error(`ERP returned HTTP ${res.status}: ${errorText.substring(0, 100)}`);
         }
+
+        const responseData = await res.json().catch(() => ({}));
+        erpSyncId = responseData.sync_id || erpSyncId;
+      } catch (fetchErr: any) {
+        isSuccess = false;
+        exp.erp_sync_status = 'ERROR_SYNC';
+        exp.erp_sync_error = fetchErr.message || 'Error de conexión HTTP con AllSender ERP';
+        errors.push(`Comprobante NCF ${exp.ncf}: ${exp.erp_sync_error}`);
+        continue;
       }
 
       if (isSuccess) {

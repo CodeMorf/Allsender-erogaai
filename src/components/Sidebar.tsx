@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext.js';
 import { ErogaLogo } from './Logo.js';
 import { 
@@ -189,11 +190,17 @@ export const Sidebar: React.FC = () => {
     }
   ];
 
+  const navigate = useNavigate();
   const currentNavSections = portal === 'super-admin' ? superAdminNavSections : companyNavSections;
 
   const handleNavClick = (viewId: string) => {
     setActiveView(viewId as any);
     setIsMobileDrawerOpen(false);
+    if (portal === 'super-admin') {
+      navigate('/super-admin');
+    } else {
+      navigate(`/company/${viewId}`);
+    }
   };
 
   const renderNavItem = (item: NavItem, isSubItem = false) => {

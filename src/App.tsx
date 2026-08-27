@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext.js';
 import { ThemeProvider } from './context/ThemeContext.js';
 import { PWAProvider } from './context/PWAContext.js';
@@ -28,8 +29,56 @@ import { ApiDocsView } from './views/ApiDocsView.js';
 import { AuthView } from './views/AuthView.js';
 import { OnboardingView } from './views/OnboardingView.js';
 
-const MainLayout: React.FC = () => {
-  const { portal, activeView, currentUser, fetchCompanies } = useApp();
+const AuthenticatedLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      {/* Sidebar */}
+      <Sidebar />
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Offline notification & Queue status */}
+        <OfflineIndicator />
+
+        <Navbar />
+
+        <main className="flex-1 overflow-y-auto p-3 pb-24 sm:p-6 lg:p-8">
+          <div className="max-w-7xl mx-auto">
+            {children}
+          </div>
+        </main>
+      </div>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <MobileBottomNav />
+
+      {/* Modals, PWA Prompts & Toasts */}
+      <ExpenseScannerModal />
+      <ExpenseDetailModal />
+      <PWAInstallBanner />
+      <PWAUpdateToast />
+      <ToastContainer />
+    </div>
+  );
+};
+
+const SuperAdminRoute: React.FC = () => {
+  const { currentUser } = useApp();
+  const isPlatformSuperAdmin = currentUser?.platform_role === 'SUPER_ADMIN' || currentUser?.platform_role === 'PLATFORM_ADMIN';
+
+  if (!isPlatformSuperAdmin) {
+    return <Navigate to="/company/dashboard" replace />;
+  }
+
+  return (
+    <AuthenticatedLayout>
+      <SuperAdminView />
+    </AuthenticatedLayout>
+  );
+};
+
+const AppRouter: React.FC = () => {
+  const { currentUser, fetchCompanies } = useApp();
   const [isOnboardingCompleted, setIsOnboardingCompleted] = useState<boolean>(() => {
     return localStorage.getItem('eroga_onboarding_done') === 'true';
   });
@@ -51,86 +100,44 @@ const MainLayout: React.FC = () => {
     );
   }
 
-  const renderActiveView = () => {
-    // If inside Super Admin Portal
-    if (portal === 'super-admin') {
-      return <SuperAdminView />;
-    }
-
-    // Company Portal Views
-    switch (activeView) {
-      case 'dashboard':
-        return <DashboardView />;
-      case 'expenses':
-        return <ExpensesListView />;
-      case 'categories':
-        return <CategoriesView />;
-      case 'cost-consolidation':
-        return <CostConsolidationView />;
-      case 'suppliers':
-        return <SuppliersView />;
-      case 'projects-vehicles':
-        return <ProjectsVehiclesView />;
-      case 'dgii-606':
-        return <DGIIReportView />;
-      case 'erp-integration':
-        return <ERPIntegrationView />;
-      case 'api-keys':
-        return <ApiKeysView />;
-      case 'api-docs':
-        return <ApiDocsView />;
-      case 'audit-logs':
-        return <AuditLogView />;
-      case 'organization':
-        return <OrganizationView />;
-      case 'team':
-      case 'users':
-        return <TeamView />;
-      default:
-        return <DashboardView />;
-    }
-  };
-
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      {/* Sidebar */}
-      <Sidebar />
+    <Routes>
+      {/* Super Admin SaaS Portal */}
+      <Route path="/super-admin/*" element={<SuperAdminRoute />} />
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Offline notification & Queue status */}
-        <OfflineIndicator />
+      {/* Tenant Company Portal */}
+      <Route path="/company/dashboard" element={<AuthenticatedLayout><DashboardView /></AuthenticatedLayout>} />
+      <Route path="/company/expenses" element={<AuthenticatedLayout><ExpensesListView /></AuthenticatedLayout>} />
+      <Route path="/company/categories" element={<AuthenticatedLayout><CategoriesView /></AuthenticatedLayout>} />
+      <Route path="/company/cost-consolidation" element={<AuthenticatedLayout><CostConsolidationView /></AuthenticatedLayout>} />
+      <Route path="/company/suppliers" element={<AuthenticatedLayout><SuppliersView /></AuthenticatedLayout>} />
+      <Route path="/company/projects-vehicles" element={<AuthenticatedLayout><ProjectsVehiclesView /></AuthenticatedLayout>} />
+      <Route path="/company/dgii-606" element={<AuthenticatedLayout><DGIIReportView /></AuthenticatedLayout>} />
+      <Route path="/company/erp-integration" element={<AuthenticatedLayout><ERPIntegrationView /></AuthenticatedLayout>} />
+      <Route path="/company/api-keys" element={<AuthenticatedLayout><ApiKeysView /></AuthenticatedLayout>} />
+      <Route path="/company/api-docs" element={<AuthenticatedLayout><ApiDocsView /></AuthenticatedLayout>} />
+      <Route path="/company/audit-logs" element={<AuthenticatedLayout><AuditLogView /></AuthenticatedLayout>} />
+      <Route path="/company/organization" element={<AuthenticatedLayout><OrganizationView /></AuthenticatedLayout>} />
+      <Route path="/company/team" element={<AuthenticatedLayout><TeamView /></AuthenticatedLayout>} />
+      <Route path="/company/users" element={<AuthenticatedLayout><TeamView /></AuthenticatedLayout>} />
 
-        <Navbar />
-
-        <main className="flex-1 overflow-y-auto p-3 pb-24 sm:p-6 lg:p-8">
-          <div className="max-w-7xl mx-auto">
-            {renderActiveView()}
-          </div>
-        </main>
-      </div>
-
-      {/* Mobile Bottom Navigation Bar */}
-      <MobileBottomNav />
-
-      {/* Modals, PWA Prompts & Toasts */}
-      <ExpenseScannerModal />
-      <ExpenseDetailModal />
-      <PWAInstallBanner />
-      <PWAUpdateToast />
-      <ToastContainer />
-    </div>
+      {/* Fallback & Root Redirect */}
+      <Route path="/" element={<Navigate to="/company/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/company/dashboard" replace />} />
+    </Routes>
   );
 };
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <PWAProvider>
-        <AppProvider>
-          <MainLayout />
-        </AppProvider>
-      </PWAProvider>
-    </ThemeProvider>
+    <BrowserRouter>
+      <ThemeProvider>
+        <PWAProvider>
+          <AppProvider>
+            <AppRouter />
+          </AppProvider>
+        </PWAProvider>
+      </ThemeProvider>
+    </BrowserRouter>
   );
 }
