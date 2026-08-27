@@ -7,7 +7,7 @@ interface AuthViewProps {
 }
 
 export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
-  const { showToast } = useApp();
+  const { showToast, fetchSession, fetchCompanies } = useApp();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -42,6 +42,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
       }
 
       showToast('success', 'Bienvenido', `Sesión iniciada como ${data.user.name}`);
+      await fetchSession();
+      await fetchCompanies();
       onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Error de autenticación');
@@ -89,6 +91,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
       }
 
       showToast('success', 'Organización Creada', `Bienvenido a ErogaAI, ${data.user.name}`);
+      await fetchSession();
+      await fetchCompanies();
       onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Fallo en registro');

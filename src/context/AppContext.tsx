@@ -305,27 +305,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const text = await res.text();
         try {
           const data = JSON.parse(text);
-          if (data && data.organization) {
-            setOrganization(data.organization);
+          if (data && data.currentUser) {
+            setCurrentUser(data.currentUser);
+            if (data.organization) {
+              setOrganization(data.organization);
+            }
             const compList = Array.isArray(data.companies) ? data.companies : [];
             const branchList = Array.isArray(data.branches) ? data.branches : [];
             setCompanies(compList);
             setBranches(branchList);
-            setCurrentCompany(compList[0] || null);
-            setCurrentBranch(branchList[0] || null);
+            if (compList.length > 0) setCurrentCompany(compList[0]);
+            if (branchList.length > 0) setCurrentBranch(branchList[0]);
             setUsers(Array.isArray(data.users) ? data.users : []);
-            setCurrentUser(data.currentUser || null);
+          } else {
+            setCurrentUser(null);
           }
         } catch (parseErr) {
           console.warn('Session JSON parse error:', parseErr);
-        }
-      }
-
-      const orgsRes = await fetch('/api/organizations');
-      if (orgsRes.ok) {
-        const oData = await orgsRes.json();
-        if (Array.isArray(oData.organizations)) {
-          setOrganizations(oData.organizations);
         }
       }
     } catch (err) {

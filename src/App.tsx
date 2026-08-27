@@ -85,9 +85,11 @@ const AppRouter: React.FC = () => {
   const { currentUser, organization, fetchCompanies, fetchSession } = useApp();
   const [isOnboardingDismissed, setIsOnboardingDismissed] = useState<boolean>(false);
 
-  // If user is not authenticated, render AuthView (Login / Register / Password Reset)
   if (!currentUser) {
-    return <AuthView onSuccess={() => fetchCompanies()} />;
+    return <AuthView onSuccess={async () => {
+      await fetchSession();
+      await fetchCompanies();
+    }} />;
   }
 
   const isTenantOnboardingDone = !!organization?.onboarding_done_at || organization?.onboarding_step === 7 || isOnboardingDismissed || localStorage.getItem('eroga_onboarding_done') === 'true';
