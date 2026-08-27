@@ -163,10 +163,17 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     const restarted = spawn(process.execPath, ['dist/server.cjs'], {
       cwd: process.cwd(),
       env: { ...process.env, NODE_ENV: process.env.E2E_RESTART_NODE_ENV || 'production', PORT: String(restartPort), ALLOWED_ORIGINS: restartUrl, TRUST_PROXY_HOPS: '0', EROGAAI_SECRET_KEY: randomSecret('restart_secret') },
-      stdio: 'ignore'
+      stdio: ['ignore', 'pipe', 'pipe']
     });
+    const restartLogs: string[] = [];
+    restarted.stdout?.on('data', chunk => restartLogs.push(String(chunk)));
+    restarted.stderr?.on('data', chunk => restartLogs.push(String(chunk)));
     try {
-      await waitForServer(restartUrl);
+      try {
+        await waitForServer(restartUrl);
+      } catch (error: any) {
+        throw new Error(`${error.message} Logs: ${restartLogs.join('').slice(-4000)}`);
+      }
       const afterRestart = await playwrightRequest.newContext({ baseURL: restartUrl });
       try {
         expect((await afterRestart.post('/api/auth/login', { data: { email: tenantAEmail, password: tenantAPassword } })).status()).toBe(200);
