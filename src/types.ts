@@ -45,6 +45,7 @@ export interface ERPConfig {
   is_enabled?: boolean;
   api_endpoint: string;
   api_key_masked: string;
+  encrypted_api_key?: string;
   target_company_id?: string;
   target_branch_id?: string;
   auto_sync_on_approval: boolean;
@@ -246,6 +247,8 @@ export interface Organization {
   address?: string;
   phone?: string;
   is_active?: boolean;
+  onboarding_step?: number;
+  onboarding_done_at?: string;
   monthly_scans_used?: number;
   monthly_scans_limit?: number;
   storage_mb_used?: number;

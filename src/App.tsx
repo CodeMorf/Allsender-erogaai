@@ -27,6 +27,7 @@ import { AuditLogView } from './views/AuditLogView.js';
 import { ApiKeysView } from './views/ApiKeysView.js';
 import { ApiDocsView } from './views/ApiDocsView.js';
 import { AuthView } from './views/AuthView.js';
+import { ImpersonationBanner } from './components/ImpersonationBanner.js';
 import { OnboardingView } from './views/OnboardingView.js';
 
 const AuthenticatedLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -37,6 +38,9 @@ const AuthenticatedLayout: React.FC<{ children: React.ReactNode }> = ({ children
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Impersonation Banner for SuperAdmin Support Mode */}
+        <ImpersonationBanner />
+
         {/* Offline notification & Queue status */}
         <OfflineIndicator />
 
@@ -78,23 +82,27 @@ const SuperAdminRoute: React.FC = () => {
 };
 
 const AppRouter: React.FC = () => {
-  const { currentUser, fetchCompanies } = useApp();
-  const [isOnboardingCompleted, setIsOnboardingCompleted] = useState<boolean>(() => {
-    return localStorage.getItem('eroga_onboarding_done') === 'true';
-  });
+  const { currentUser, organization, fetchCompanies, fetchSession } = useApp();
+  const [isOnboardingDismissed, setIsOnboardingDismissed] = useState<boolean>(false);
 
   // If user is not authenticated, render AuthView (Login / Register / Password Reset)
   if (!currentUser) {
     return <AuthView onSuccess={() => fetchCompanies()} />;
   }
 
+  const isTenantOnboardingDone = !!organization?.onboarding_done_at || organization?.onboarding_step === 7 || isOnboardingDismissed || localStorage.getItem('eroga_onboarding_done') === 'true';
+
   // If user is authenticated for the first time, show 7-step Onboarding Wizard
-  if (!isOnboardingCompleted) {
+  if (!isTenantOnboardingDone) {
     return (
       <OnboardingView 
-        onComplete={() => {
-          setIsOnboardingCompleted(true);
+        onComplete={async () => {
+          try {
+            await fetch('/api/organization/onboarding/complete', { method: 'POST' });
+          } catch {}
+          setIsOnboardingDismissed(true);
           localStorage.setItem('eroga_onboarding_done', 'true');
+          fetchSession();
         }} 
       />
     );

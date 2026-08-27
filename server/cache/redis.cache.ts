@@ -1,8 +1,5 @@
-import { createRequire } from 'module';
 import { CacheService } from './cache.interface.ts';
 import { MemoryCacheService } from './memory.cache.ts';
-
-const _require = createRequire(import.meta.url);
 
 export class RedisCacheService implements CacheService {
   private redis: any = null;
@@ -11,16 +8,18 @@ export class RedisCacheService implements CacheService {
   constructor(redisUrl?: string) {
     this.fallbackMemory = new MemoryCacheService();
     try {
-      // ESM-safe require via createRequire — avoids crash if ioredis is absent
-      const Redis = _require('ioredis');
-      this.redis = new Redis(redisUrl || process.env.REDIS_URL || 'redis://localhost:6379', {
-        maxRetriesPerRequest: 1,
-        lazyConnect: true
-      });
-      this.redis.connect().catch((err: any) => {
-        console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
-        this.redis = null;
-      });
+      const getModule = typeof require !== 'undefined' ? require : null;
+      const Redis = getModule ? getModule('ioredis') : null;
+      if (Redis) {
+        this.redis = new Redis(redisUrl || process.env.REDIS_URL || 'redis://localhost:6379', {
+          maxRetriesPerRequest: 1,
+          lazyConnect: true
+        });
+        this.redis.connect().catch((err: any) => {
+          console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
+          this.redis = null;
+        });
+      }
     } catch {
       this.redis = null;
     }

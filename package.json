@@ -15,6 +15,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:postgres:generate": "prisma generate --schema=prisma/schema.postgresql.prisma",
+    "db:postgres:push": "prisma db push --schema=prisma/schema.postgresql.prisma",
     "migrate:json-to-sql": "tsx scripts/migrate-json-to-sql.ts"
   },
   "dependencies": {

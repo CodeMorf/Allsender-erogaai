@@ -1,0 +1,578 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// Core Multi-Tenant Domain Models
+// ----------------------------------------------------
+
+model Organization {
+  id                  String   @id @default(uuid())
+  name                String
+  rnc                 String
+  currency            String   @default("DOP")
+  plan                String   @default("STARTER")
+  logo_url            String?
+  address             String?
+  phone               String?
+  country             String   @default("Dominican Republic")
+  is_active           Boolean  @default(true)
+  onboarding_step     Int      @default(1)
+  onboarding_done_at  DateTime?
+  monthly_scans_used  Int      @default(0)
+  monthly_scans_limit Int      @default(100)
+  storage_mb_used     Float    @default(0.0)
+  storage_mb_limit    Float    @default(500.0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  companies           Company[]
+  branches            Branch[]
+  users               User[]
+  memberships         Membership[]
+  sessions            Session[]
+  expenses            Expense[]
+  categories          ExpenseCategory[]
+  cost_centers        CostCenter[]
+  suppliers           Supplier[]
+  projects            Project[]
+  vehicles            Vehicle[]
+  receipts            Receipt[]
+  ai_providers        AIProviderConfig[]
+  ai_usage_logs       AIUsageLog[]
+  api_keys            ApiKey[]
+  api_key_logs        ApiKeyLog[]
+  webhooks            WebhookSubscription[]
+  audit_logs          AuditLog[]
+  subscriptions       Subscription[]
+  erp_config          ERPConfig?
+  email_settings      EmailSettings?
+
+  @@map("organizations")
+}
+
+model Company {
+  id              String   @id @default(uuid())
+  organization_id String
+  name            String
+  trade_name      String?
+  rnc             String
+  id_type         String   @default("RNC") // RNC | CEDULA
+  tax_regime      String   @default("REGIMEN_GENERAL")
+  address         String
+  province        String
+  municipality    String
+  sector          String?
+  phone           String?
+  email           String?
+  logo_url        String?
+  currency        String   @default("DOP")
+  country         String   @default("Dominican Republic")
+  timezone        String   @default("America/Santo_Domingo")
+  is_main         Boolean  @default(false)
+  status          String   @default("ACTIVO")
+  is_active       Boolean  @default(true)
+  created_by      String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  branches        Branch[]
+  expenses        Expense[]
+  api_keys        ApiKey[]
+
+  @@map("companies")
+}
+
+model Branch {
+  id              String   @id @default(uuid())
+  company_id      String
+  organization_id String
+  name            String
+  code            String
+  address         String
+  province        String?
+  municipality    String?
+  phone           String?
+  responsible     String?
+  status          String   @default("ACTIVO")
+  is_active       Boolean  @default(true)
+  created_by      String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  company         Company      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  expenses        Expense[]
+  api_keys        ApiKey[]
+
+  @@map("branches")
+}
+
+model User {
+  id              String   @id @default(uuid())
+  organization_id String
+  email           String   @unique
+  name            String
+  avatar          String?
+  role            String   @default("EMPLOYEE") // ADMIN, ACCOUNTANT, SUPERVISOR, EMPLOYEE
+  platform_role   String   @default("NONE") // SUPER_ADMIN, PLATFORM_ADMIN, SUPPORT, BILLING_ADMIN, NONE
+  department      String?  @default("Operaciones")
+  status          String   @default("ACTIVE")
+  is_active       Boolean  @default(true)
+  password_hash   String
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  memberships     Membership[]
+  sessions        Session[]
+  expenses_created Expense[]   @relation("ExpenseCreator")
+
+  @@map("users")
+}
+
+model Membership {
+  id              String   @id @default(uuid())
+  organization_id String
+  user_id         String
+  role            String   @default("EMPLOYEE")
+  status          String   @default("ACTIVE")
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("memberships")
+}
+
+model Session {
+  id               String    @id @default(uuid())
+  token_hash       String    @unique
+  user_id          String
+  organization_id  String
+  ip_address       String?
+  user_agent       String?
+  expires_at       DateTime
+  created_at       DateTime  @default(now())
+  last_activity_at DateTime  @default(now())
+  revoked_at       DateTime?
+
+  organization     Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  user             User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Role {
+  id              String   @id @default(uuid())
+  organization_id String
+  name            String
+  description     String
+  is_system       Boolean  @default(false)
+  color           String?  @default("blue")
+  permissions     String // JSON array string
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@map("roles")
+}
+
+model Expense {
+  id                      String   @id @default(uuid())
+  external_id             String?
+  idempotency_key         String?  @unique
+  organization_id         String
+  company_id              String
+  branch_id               String
+  created_by_user_id      String
+  created_by_name         String
+  expense_date            String
+  supplier_name           String
+  supplier_rnc            String
+  supplier_id             String?
+  ncf                     String
+  ncf_type                String   @default("B01")
+  document_type           String   @default("FACTURA_CREDITO_FISCAL")
+  classification          String   @default("GASTO_OPERATIVO")
+  expense_category        String
+  cost_center_id          String?
+  project_id              String?
+  vehicle_id              String?
+  subtotal                Float
+  itbis_amount            Float
+  legal_tip_amount        Float    @default(0.0)
+  other_taxes             Float    @default(0.0)
+  total_amount            Float
+  currency                String   @default("DOP")
+  payment_method          String   @default("TRANSFERENCIA")
+  dgii_expense_type       String?
+  dgii_payment_type       String?
+  status                  String   @default("PENDIENTE_REVISION")
+  approval_notes          String?
+  correction_request_note String?
+  reviewed_by             String?
+  reviewed_at             DateTime?
+  receipt_image_url       String?
+  ocr_raw_text            String?
+  ai_confidence_score     Float    @default(95.0)
+  ai_provider_used        String   @default("GEMINI")
+  ai_model_used           String   @default("gemini-2.5-flash")
+  all_sender_sync_id      String?
+  all_sender_synced_at    DateTime?
+  erp_sync_status         String   @default("DESACTIVADO")
+  erp_sync_error          String?
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  organization            Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  company                 Company      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  branch                  Branch       @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  creator                 User         @relation("ExpenseCreator", fields: [created_by_user_id], references: [id])
+  line_items              ExpenseItem[]
+
+  @@map("expenses")
+}
+
+model ExpenseItem {
+  id             String  @id @default(uuid())
+  expense_id     String
+  description    String
+  quantity       Float   @default(1.0)
+  unit_price     Float
+  itbis_rate     Float   @default(18.0)
+  total          Float
+  sku            String?
+  cost_center_id String?
+  project_id     String?
+
+  expense        Expense @relation(fields: [expense_id], references: [id], onDelete: Cascade)
+
+  @@map("expense_items")
+}
+
+model ExpenseCategory {
+  id                      String   @id @default(uuid())
+  organization_id         String
+  name                    String
+  code                    String
+  account_code            String
+  dgii_type_code          String
+  default_classification  String   @default("GASTO_OPERATIVO")
+  default_itbis_rate      Float    @default(18.0)
+  monthly_budget          Float    @default(0.0)
+  icon                    String?
+  color                   String?
+  is_active               Boolean  @default(true)
+  is_system               Boolean  @default(false)
+  requires_approval_above Float?
+  created_at              DateTime @default(now())
+
+  organization            Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("expense_categories")
+}
+
+model CostCenter {
+  id                  String   @id @default(uuid())
+  organization_id     String
+  code                String
+  name                String
+  manager_name        String?
+  budget_monthly      Float    @default(0.0)
+  spent_current_month Float    @default(0.0)
+
+  organization        Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("cost_centers")
+}
+
+model Supplier {
+  id              String   @id @default(uuid())
+  organization_id String
+  rnc             String
+  name            String
+  trade_name      String?
+  phone           String?
+  email           String?
+  category_default String?
+  status_dgii     String   @default("ACTIVO")
+  total_invoiced  Float    @default(0.0)
+  created_at      DateTime @default(now())
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("suppliers")
+}
+
+model Project {
+  id              String   @id @default(uuid())
+  organization_id String
+  code            String
+  name            String
+  client_name     String?
+  budget          Float    @default(0.0)
+  spent           Float    @default(0.0)
+  status          String   @default("ACTIVO")
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("projects")
+}
+
+model Vehicle {
+  id               String   @id @default(uuid())
+  organization_id  String
+  plate            String
+  brand            String
+  model            String
+  driver_name      String?
+  fuel_type        String   @default("GASOLINA_PREMIUM")
+  total_fuel_spent Float    @default(0.0)
+  last_mileage     Float?
+
+  organization     Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("vehicles")
+}
+
+model Receipt {
+  id              String   @id @default(uuid())
+  organization_id String
+  status          String   @default("PROCESSED")
+  image_url       String?
+  file_name       String?
+  mime_type       String?  @default("image/jpeg")
+  extraction_json String?
+  error           String?
+  created_at      DateTime @default(now())
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("receipts")
+}
+
+model AIProviderConfig {
+  id                    String    @id @default(uuid())
+  organization_id       String
+  provider_type         String    // CODEMORF, GEMINI, GROQ, OPENAI
+  name                  String
+  encrypted_key         String?
+  masked_key            String
+  has_key               Boolean   @default(false)
+  selected_model        String
+  available_models      String    // JSON array string
+  is_active             Boolean   @default(true)
+  is_primary            Boolean   @default(false)
+  is_secondary_fallback Boolean   @default(false)
+  total_requests        Int       @default(0)
+  total_tokens          Int       @default(0)
+  status                String    @default("ONLINE")
+  last_test_message     String?
+  last_used_at          DateTime?
+  created_at            DateTime  @default(now())
+
+  organization          Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("ai_provider_configs")
+}
+
+model AIUsageLog {
+  id              String   @id @default(uuid())
+  organization_id String
+  provider_type   String
+  model           String
+  action          String
+  tokens_prompt   Int      @default(0)
+  tokens_completion Int    @default(0)
+  duration_ms     Int
+  status          String   @default("SUCCESS")
+  created_at      DateTime @default(now())
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("ai_usage_logs")
+}
+
+model ApiKey {
+  id              String    @id @default(uuid())
+  organization_id String
+  company_id      String
+  branch_id       String?
+  name            String
+  key_hash        String    @unique
+  masked_key      String
+  key_prefix      String?
+  scopes          String    // JSON array string
+  expires_at      DateTime?
+  last_used_at    DateTime?
+  total_requests  Int       @default(0)
+  is_active       Boolean   @default(true)
+  status          String    @default("ACTIVE")
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  company         Company      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  branch          Branch?      @relation(fields: [branch_id], references: [id], onDelete: SetNull)
+
+  @@map("api_keys")
+}
+
+model ApiKeyLog {
+  id              String   @id @default(uuid())
+  api_key_id      String
+  organization_id String
+  endpoint        String
+  method          String
+  status_code     Int
+  ip_address      String
+  latency_ms      Int
+  created_at      DateTime @default(now())
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("api_key_logs")
+}
+
+model WebhookSubscription {
+  id                String    @id @default(uuid())
+  organization_id   String
+  url               String
+  events            String    // JSON array string
+  secret            String
+  is_active         Boolean   @default(true)
+  created_at        DateTime  @default(now())
+  last_triggered_at DateTime?
+
+  organization      Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("webhook_subscriptions")
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  organization_id String
+  user_id         String
+  user_name       String
+  impersonated_by String?
+  action          String
+  entity_type     String
+  entity_id       String
+  details         String
+  before_state    String?  // JSON string
+  after_state     String?  // JSON string
+  result          String   @default("SUCCESS")
+  ip_address      String?
+  user_agent      String?
+  request_id      String?
+  created_at      DateTime @default(now())
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}
+
+model ERPConfig {
+  id                      String    @id @default(uuid())
+  organization_id         String    @unique
+  is_enabled              Boolean   @default(false)
+  api_endpoint            String
+  encrypted_api_key       String?
+  api_key_masked          String
+  target_company_id       String?
+  target_branch_id        String?
+  auto_sync_on_approval   Boolean   @default(false)
+  ledger_account_default  String    @default("6105-01-000")
+  last_sync_time          DateTime?
+  last_test_time          DateTime?
+  last_error_message      String?
+  sync_status             String    @default("DESACTIVADO")
+
+  organization            Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("erp_configs")
+}
+
+model EmailSettings {
+  id              String   @id @default(uuid())
+  organization_id String   @unique
+  smtp_host       String
+  smtp_port       Int      @default(587)
+  smtp_secure     Boolean  @default(false)
+  smtp_user       String
+  encrypted_pass  String?
+  smtp_from       String
+  smtp_from_name  String   @default("ErogaAI SaaS")
+
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@map("email_settings")
+}
+
+model Plan {
+  id                 String   @id @default(uuid())
+  code               String   @unique // STARTER, PROFESSIONAL, BUSINESS, ENTERPRISE
+  name               String
+  monthly_price      Float
+  currency           String   @default("USD")
+  max_users          Int      @default(5)
+  max_companies      Int      @default(1)
+  max_branches       Int      @default(3)
+  ocr_limit          Int      @default(500)
+  managed_ai_tokens  Int      @default(100000)
+  api_request_limit  Int      @default(10000)
+  storage_mb         Float    @default(2000.0)
+  email_reports      Boolean  @default(true)
+  erp_sync           Boolean  @default(true)
+  api_access         Boolean  @default(true)
+  is_active          Boolean  @default(true)
+  created_at         DateTime @default(now())
+
+  subscriptions      Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                      String    @id @default(uuid())
+  organization_id         String
+  plan_id                 String
+  status                  String    @default("ACTIVE") // TRIAL, ACTIVE, PAST_DUE, CANCELED
+  trial_started_at        DateTime?
+  trial_ends_at          DateTime?
+  current_period_start    DateTime  @default(now())
+  current_period_end      DateTime
+  cancel_at_period_end    Boolean   @default(false)
+  provider                String?   @default("MANUAL")
+  provider_customer_id    String?
+  provider_subscription_id String?
+
+  organization            Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  plan                    Plan         @relation(fields: [plan_id], references: [id])
+
+  @@map("subscriptions")
+}
+
+model Job {
+  id              String    @id @default(uuid())
+  type            String    // OCR_PROCESS, EMAIL_REPORT, ERP_SYNC, WEBHOOK_DELIVERY, PDF_REPORT, XLSX_REPORT
+  payload_json    String
+  status          String    @default("QUEUED") // QUEUED, PROCESSING, SUCCESS, FAILED, RETRYING
+  attempts        Int       @default(0)
+  max_attempts    Int       @default(3)
+  error_message   String?
+  scheduled_at    DateTime  @default(now())
+  started_at      DateTime?
+  completed_at    DateTime?
+
+  @@map("jobs")
+}

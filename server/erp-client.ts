@@ -1,5 +1,6 @@
 import { ExpenseRecord, ERPConfig } from '../src/types.ts';
 import crypto from 'crypto';
+import { decryptApiKey } from './encryption.ts';
 
 export interface ERPSyncResult {
   success: boolean;
@@ -73,12 +74,22 @@ export async function syncExpensesToAllSenderERP(
       let erpSyncId = `as_inv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
       let isSuccess = true;
 
+      // Decrypt real API key for authorization
+      let realApiKey = '';
+      if (config.encrypted_api_key) {
+        try {
+          realApiKey = decryptApiKey(config.encrypted_api_key);
+        } catch {
+          realApiKey = config.api_key_masked;
+        }
+      }
+
       try {
         const res = await fetch(config.api_endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.api_key_masked}`,
+            'Authorization': `Bearer ${realApiKey}`,
             'Idempotency-Key': idempotencyKey,
             'X-ErogaAI-Org': orgId
           },

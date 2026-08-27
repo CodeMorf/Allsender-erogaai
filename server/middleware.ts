@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { db } from './db.ts';
+import { cache } from './cache/index.ts';
 
 export interface AuthenticatedRequest extends Request {
   user_id?: string;
@@ -25,7 +26,7 @@ export function requestIdMiddleware(req: AuthenticatedRequest, res: Response, ne
  * Extracts and verifies HttpOnly session cookies or Bearer API keys.
  * Injects req.organization_id and req.user_id. Never trusts frontend-supplied identity headers.
  */
-export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+export async function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
 
   if (!sessionToken) {
@@ -35,10 +36,18 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
     });
   }
 
-  // Verify Session Token in DB
-  const sessionData = db.validateSessionToken(sessionToken);
+  // Fast cache lookup (Redis / Memory)
+  let sessionData = await cache.get<any>(`session:${sessionToken}`);
+  if (!sessionData) {
+    sessionData = db.validateSessionToken(sessionToken);
+    if (sessionData && sessionData.user) {
+      await cache.set(`session:${sessionToken}`, sessionData, 300); // 5 minutes TTL
+    }
+  }
+
   if (!sessionData || !sessionData.user) {
     res.clearCookie('eroga_session');
+    await cache.del(`session:${sessionToken}`);
     return res.status(401).json({ 
       error: 'Sesión expirada o inválida. Por favor inicie sesión nuevamente.', 
       code: 'SESSION_EXPIRED' 

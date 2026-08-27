@@ -23,6 +23,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { AIConfigurationView } from './AIConfigurationView.js';
+import { SuperAdminTenantsView } from './SuperAdminTenantsView.js';
 
 export const SuperAdminView: React.FC = () => {
   const { 
@@ -142,77 +143,9 @@ export const SuperAdminView: React.FC = () => {
         </button>
       </div>
 
-      {/* Tab 1: Tenants List */}
+      {/* Tab 1: Real Multi-Tenant Management & Server-Side Impersonation */}
       {activeTab === 'tenants' && (
-        <div className="space-y-4">
-          <div className="all-card rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
-            <div className="relative w-full sm:w-80">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar empresa por nombre o RNC..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none"
-              />
-            </div>
-            <button
-              onClick={() => showToast('info', 'Alta de Empresa', 'Formulario para aprovisionar nuevo inquilino SaaS.')}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-xs hover:bg-blue-700"
-            >
-              <span>+ Alta Inquilino</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredOrgs.map((org) => (
-              <div key={org.id} className="all-card rounded-2xl p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 font-extrabold text-base flex items-center justify-center">
-                      {org.name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{org.name}</h3>
-                      <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
-                        <span>RNC: {org.rnc}</span>
-                        <span>•</span>
-                        <span className="text-blue-600 font-semibold">{org.plan}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                    Activa
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-xs space-y-1.5 border border-slate-200/50 dark:border-slate-700/40">
-                  <p className="text-slate-600 dark:text-slate-400 text-[11px] truncate">
-                    📍 {org.address || 'Santo Domingo, República Dominicana'}
-                  </p>
-                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
-                    📞 {org.phone || '+1 (809) 567-8900'}
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
-                  <span className="text-[11px] text-slate-400">ID: {org.id}</span>
-                  <button
-                    onClick={() => {
-                      setPortal('company');
-                      showToast('info', 'Accediendo como Inquilino', `Has entrado al panel de ${org.name}`);
-                    }}
-                    className="flex items-center gap-1 text-blue-600 dark:text-blue-400 font-bold hover:underline cursor-pointer"
-                  >
-                    <span>Entrar a Panel Empresa</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <SuperAdminTenantsView />
       )}
 
       {/* Tab 2: AI Configuration View (Reuse rich view) */}

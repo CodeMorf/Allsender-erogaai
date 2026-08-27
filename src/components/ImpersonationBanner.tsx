@@ -3,11 +3,13 @@ import { AlertTriangle, LogOut } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 
 export const ImpersonationBanner: React.FC = () => {
-  const { organization, showToast } = useApp();
-  const impersonatedOrgId = localStorage.getItem('eroga_impersonating_org_id');
-  const impersonatedOrgName = localStorage.getItem('eroga_impersonating_org_name') || organization?.name || 'Organización Cliente';
+  const { organization, showToast, currentUser } = useApp();
+  const isPlatformAdmin = currentUser?.platform_role === 'SUPER_ADMIN' || currentUser?.platform_role === 'PLATFORM_ADMIN';
+  const isCookieSet = typeof document !== 'undefined' && document.cookie.includes('eroga_impersonate_org');
+  const isImpersonating = (isCookieSet || !!localStorage.getItem('eroga_impersonating_org_id')) && isPlatformAdmin;
+  const impersonatedOrgName = organization?.name || localStorage.getItem('eroga_impersonating_org_name') || 'Organización Inquilina';
 
-  if (!impersonatedOrgId) return null;
+  if (!isImpersonating) return null;
 
   const handleStopImpersonation = async () => {
     try {
@@ -15,10 +17,9 @@ export const ImpersonationBanner: React.FC = () => {
       localStorage.removeItem('eroga_impersonating_org_id');
       localStorage.removeItem('eroga_impersonating_org_name');
       showToast('info', 'Impersonación Finalizada', 'Has regresado al Portal SuperAdmin.');
-      window.location.href = '/super-admin/tenants';
+      window.location.href = '/super-admin';
     } catch {
-      localStorage.removeItem('eroga_impersonating_org_id');
-      window.location.reload();
+      window.location.href = '/super-admin';
     }
   };
 

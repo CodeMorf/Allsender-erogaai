@@ -52,16 +52,29 @@ async function startServer() {
   app.get('/api/session', (req, res) => {
     const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
-      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null, is_impersonating: false });
     }
 
     const sessionData = db.validateSessionToken(token);
     if (!sessionData || !sessionData.user) {
       res.clearCookie('eroga_session');
-      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null, is_impersonating: false });
     }
 
-    const orgId = sessionData.organization_id;
+    let orgId = sessionData.organization_id;
+    let isImpersonating = false;
+
+    // Server-Side Impersonation resolution
+    const impersonateCookie = req.cookies?.eroga_impersonate_org;
+    const isSuperAdmin = sessionData.user.platform_role === 'SUPER_ADMIN' || sessionData.user.platform_role === 'PLATFORM_ADMIN';
+    if (impersonateCookie && isSuperAdmin) {
+      const targetOrg = db.getOrganizationById(impersonateCookie);
+      if (targetOrg && targetOrg.is_active) {
+        orgId = targetOrg.id;
+        isImpersonating = true;
+      }
+    }
+
     const org = db.getOrganizationById(orgId);
     const companies = db.getCompanies(orgId);
     const branches = db.getBranches(orgId);
@@ -72,7 +85,9 @@ async function startServer() {
       companies,
       branches,
       users,
-      currentUser: sessionData.user
+      currentUser: sessionData.user,
+      is_impersonating: isImpersonating,
+      impersonated_org: isImpersonating ? org : null
     });
   });
 
@@ -158,8 +173,23 @@ async function startServer() {
   });
 
   app.get('/api/platform/tenants', platformAdminMiddleware, getTenantsHandler);
-  app.post('/api/platform/impersonation/:organizationId/start', platformAdminMiddleware, startImpersonationHandler);
+  app.post(['/api/platform/impersonation/:organizationId/start', '/api/platform/impersonation/start/:organizationId'], platformAdminMiddleware, startImpersonationHandler);
   app.post('/api/platform/impersonation/stop', platformAdminMiddleware, stopImpersonationHandler);
+
+  // Tenant Onboarding State Persistence
+  app.post('/api/organization/onboarding/complete', (req: AuthenticatedRequest, res) => {
+    const orgId = req.organization_id!;
+    const org = db.getOrganizationById(orgId);
+    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+
+    const updated = db.saveOrganization({
+      id: orgId,
+      onboarding_step: 7,
+      onboarding_done_at: new Date().toISOString()
+    } as any);
+
+    res.json({ success: true, organization: updated });
+  });
 
   // --------------------------------------------------
   // Users & Team Management (Gestión de Equipo)
@@ -729,11 +759,21 @@ async function startServer() {
   app.get('/api/reports/dgii-606', (req, res) => {
     const orgId = (req as AuthenticatedRequest).organization_id!;
     const companyId = req.query.company_id as string;
+    const rawPeriod = (req.query.period as string || '').replace(/[^0-9]/g, '');
     
     let expenses = db.getExpenses(orgId).filter(e => e.status === 'APROBADO' || e.status === 'SINCRONIZADO_ERP');
     if (companyId) {
       expenses = expenses.filter(e => e.company_id === companyId);
     }
+
+    if (rawPeriod.length >= 6) {
+      const yearMonth = `${rawPeriod.substring(0, 4)}-${rawPeriod.substring(4, 6)}`;
+      expenses = expenses.filter(e => (e.expense_date || e.date || '').startsWith(yearMonth));
+    }
+
+    const reportPeriod = rawPeriod.length >= 6 
+      ? rawPeriod.substring(0, 6) 
+      : new Date().toISOString().substring(0, 7).replace('-', '');
 
     const records606 = expenses.map(e => {
       const isCedula = (e.supplier_rnc || '').replace(/\D/g, '').length === 11;
@@ -764,7 +804,7 @@ async function startServer() {
     });
 
     res.json({
-      periodo: new Date().toISOString().substring(0, 7).replace('-', ''),
+      periodo: reportPeriod,
       total_records: records606.length,
       total_amount: records606.reduce((a, b) => a + b.total_monto_facturado, 0),
       total_itbis: records606.reduce((a, b) => a + b.itbis_facturado, 0),

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { db } from './db.ts';
+import { cache } from './cache/index.ts';
 import { AuthenticatedRequest } from './middleware.ts';
 import { sendEmail } from './mailer.ts';
 
@@ -173,8 +174,10 @@ export async function logoutHandler(req: AuthenticatedRequest, res: Response) {
   const sessionToken = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
   if (sessionToken) {
     db.revokeSessionToken(sessionToken);
+    await cache.del(`session:${sessionToken}`);
   }
   res.clearCookie('eroga_session');
+  res.clearCookie('eroga_impersonate_org');
   res.json({ message: 'Sesión cerrada exitosamente.' });
 }
 

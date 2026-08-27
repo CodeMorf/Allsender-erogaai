@@ -23,8 +23,10 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Generate Prisma Client
-        run: npx prisma generate
+      - name: Generate Prisma Client (SQLite & PostgreSQL)
+        run: |
+          npx prisma generate
+          npm run db:postgres:generate
 
       - name: TypeScript Linting Check
         run: npm run lint

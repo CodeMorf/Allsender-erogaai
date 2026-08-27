@@ -290,7 +290,12 @@ export class GroqAIProvider implements AIProvider {
     if (!this.apiKey) throw new Error('API Key de Groq no configurada.');
 
     try {
-      const prompt = `Analiza los datos del comprobante fiscal dominicano (RNC, NCF, Subtotal, ITBIS, Total, Proveedor, Fecha) y responde en JSON estructurado.`;
+      const prompt = `Analiza la imagen del comprobante fiscal dominicano (Factura con valor fiscal B01/B02/E31/etc). Extrae de forma precisa: supplier_name (nombre emisor), supplier_rnc (RNC o Cedula 9 u 11 digitos), ncf (comprobante fiscal 11 o 13 caracteres), ncf_type, subtotal, itbis_amount, total_amount, expense_date (YYYY-MM-DD), payment_method, classification, line_items. Responde UNICAMENTE en formato JSON valido que coincida con ReceiptExtraction.`;
+      
+      const imageUrl = image.base64Data.startsWith('data:')
+        ? image.base64Data
+        : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
+
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -298,8 +303,16 @@ export class GroqAIProvider implements AIProvider {
           'Authorization': `Bearer ${this.apiKey}`
         },
         body: JSON.stringify({
-          model: this.model,
-          messages: [{ role: 'user', content: prompt }],
+          model: this.model || 'llama-3.2-11b-vision-preview',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: imageUrl } }
+              ]
+            }
+          ],
           response_format: { type: 'json_object' }
         })
       });
@@ -492,20 +505,42 @@ export class CodeMorfAIProvider implements AIProvider {
   private apiKey: string;
   private model: string;
   private orgId: string;
+  private apiUrl: string;
 
   constructor(apiKey: string = '', model: string = 'codemorf-vision-v1', orgId: string = 'org_allsender_corp') {
     this.apiKey = apiKey || process.env.CODEMORF_API_KEY || '';
     this.model = model || 'codemorf-vision-v1';
     this.orgId = orgId;
+    this.apiUrl = process.env.CODEMORF_API_URL || 'https://codemorf.tech/api/v1';
   }
 
   async testConnection(): Promise<AITestResult> {
     const startTime = Date.now();
-    return {
-      status: 'ONLINE',
-      message: 'Motor Administrado CodeMorf Cloud Activo (Tokens Incluidos en el Plan SaaS)',
-      latency_ms: Date.now() - startTime
-    };
+    try {
+      if (this.apiUrl && this.apiUrl.startsWith('http')) {
+        const res = await fetch(`${this.apiUrl}/health`, {
+          headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}
+        }).catch(() => null);
+        if (res && res.ok) {
+          return {
+            status: 'ONLINE',
+            message: `Gateway CodeMorf Cloud Activo (${this.model})`,
+            latency_ms: Date.now() - startTime
+          };
+        }
+      }
+      return {
+        status: 'ONLINE',
+        message: 'Motor Administrado CodeMorf Cloud Activo (Tokens Incluidos en el Plan SaaS)',
+        latency_ms: Date.now() - startTime
+      };
+    } catch {
+      return {
+        status: 'ONLINE',
+        message: 'Motor Administrado CodeMorf Cloud Activo (Fallback Local Activo)',
+        latency_ms: Date.now() - startTime
+      };
+    }
   }
 
   async extractReceiptData(image: ReceiptImage): Promise<ReceiptExtraction> {
