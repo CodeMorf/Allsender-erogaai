@@ -162,7 +162,7 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     const restartUrl = `http://127.0.0.1:${restartPort}`;
     const restarted = spawn(process.execPath, ['dist/server.cjs'], {
       cwd: process.cwd(),
-      env: { ...process.env, NODE_ENV: process.env.E2E_RESTART_NODE_ENV || 'production', PORT: String(restartPort), ALLOWED_ORIGINS: restartUrl, TRUST_PROXY_HOPS: '0', EROGAAI_SECRET_KEY: randomSecret('restart_secret') },
+      env: { ...process.env, NODE_ENV: process.env.E2E_RESTART_NODE_ENV || 'production', PORT: String(restartPort), ALLOWED_ORIGINS: restartUrl, TRUST_PROXY_HOPS: '0', EROGAAI_SECRET_KEY: randomSecret('restart_secret'), E2E_ALLOW_INSECURE_COOKIES: 'true' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     const restartLogs: string[] = [];

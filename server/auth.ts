@@ -12,7 +12,7 @@ import { prismaRepo, RepositoryError } from './database/prisma.repository.ts';
 export function setSessionCookie(res: Response, token: string) {
   res.cookie('eroga_session', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' && process.env.E2E_ALLOW_INSECURE_COOKIES !== 'true',
     sameSite: 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
   });
