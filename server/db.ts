@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { 
   Organization, 
   Company, 
@@ -559,6 +561,8 @@ export const getDefaultRolesForOrg = (orgId: string): RoleDefinition[] => {
   ];
 };
 
+const DB_FILE_PATH = path.join(process.cwd(), 'data', 'db.json');
+
 export class ErogaAIDatabase {
   private organizations: Organization[] = [...initialOrganizations];
   private users: User[] = [...initialUsers];
@@ -589,6 +593,81 @@ export class ErogaAIDatabase {
     ledger_account_default: '6105-01-000',
     sync_status: 'DESACTIVADO'
   };
+
+  constructor() {
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk() {
+    try {
+      const dir = path.dirname(DB_FILE_PATH);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      if (fs.existsSync(DB_FILE_PATH)) {
+        const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.organizations) && parsed.organizations.length > 0) this.organizations = parsed.organizations;
+        if (Array.isArray(parsed.users) && parsed.users.length > 0) this.users = parsed.users;
+        if (Array.isArray(parsed.memberships) && parsed.memberships.length > 0) this.memberships = parsed.memberships;
+        if (Array.isArray(parsed.roles)) this.roles = parsed.roles;
+        if (Array.isArray(parsed.companies)) this.companies = parsed.companies;
+        if (Array.isArray(parsed.branches)) this.branches = parsed.branches;
+        if (Array.isArray(parsed.expenses)) this.expenses = parsed.expenses;
+        if (Array.isArray(parsed.categories) && parsed.categories.length > 0) this.categories = parsed.categories;
+        if (Array.isArray(parsed.costCenters)) this.costCenters = parsed.costCenters;
+        if (Array.isArray(parsed.suppliers)) this.suppliers = parsed.suppliers;
+        if (Array.isArray(parsed.projects)) this.projects = parsed.projects;
+        if (Array.isArray(parsed.vehicles)) this.vehicles = parsed.vehicles;
+        if (Array.isArray(parsed.auditLogs)) this.auditLogs = parsed.auditLogs;
+        if (Array.isArray(parsed.aiProviders) && parsed.aiProviders.length > 0) this.aiProviders = parsed.aiProviders;
+        if (Array.isArray(parsed.aiUsageLogs)) this.aiUsageLogs = parsed.aiUsageLogs;
+        if (Array.isArray(parsed.apiKeys)) this.apiKeys = parsed.apiKeys;
+        if (Array.isArray(parsed.apiKeyLogs)) this.apiKeyLogs = parsed.apiKeyLogs;
+        if (Array.isArray(parsed.receipts)) this.receipts = parsed.receipts;
+        if (Array.isArray(parsed.webhooks)) this.webhooks = parsed.webhooks;
+        if (parsed.erpConfig) this.erpConfig = parsed.erpConfig;
+      } else {
+        this.saveToDisk();
+      }
+    } catch (err) {
+      console.error('[ErogaAI DB] Error loading database file:', err);
+    }
+  }
+
+  public saveToDisk() {
+    try {
+      const dir = path.dirname(DB_FILE_PATH);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const data = {
+        organizations: this.organizations,
+        users: this.users,
+        memberships: this.memberships,
+        roles: this.roles,
+        companies: this.companies,
+        branches: this.branches,
+        expenses: this.expenses,
+        categories: this.categories,
+        costCenters: this.costCenters,
+        suppliers: this.suppliers,
+        projects: this.projects,
+        vehicles: this.vehicles,
+        auditLogs: this.auditLogs,
+        aiProviders: this.aiProviders,
+        aiUsageLogs: this.aiUsageLogs,
+        apiKeys: this.apiKeys,
+        apiKeyLogs: this.apiKeyLogs,
+        receipts: this.receipts,
+        webhooks: this.webhooks,
+        erpConfig: this.erpConfig
+      };
+      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('[ErogaAI DB] Error persisting database to disk:', err);
+    }
+  }
 
   // ----------------------------------------------------
   // Organizations
@@ -1817,9 +1896,11 @@ export class ErogaAIDatabase {
         ...fullSup,
         total_invoiced: (prev.total_invoiced || 0) + (Number(sup.total_invoiced) || 0)
       };
+      this.saveToDisk();
       return this.suppliers[existingIdx];
     } else {
       this.suppliers.push(fullSup);
+      this.saveToDisk();
       return fullSup;
     }
   }
@@ -1827,6 +1908,7 @@ export class ErogaAIDatabase {
   deleteSupplier(orgId: string, id: string): boolean {
     const initialLen = this.suppliers.length;
     this.suppliers = this.suppliers.filter(s => !(s.organization_id === orgId && s.id === id));
+    this.saveToDisk();
     return this.suppliers.length < initialLen;
   }
 
@@ -1854,9 +1936,11 @@ export class ErogaAIDatabase {
 
     if (existingIdx !== -1) {
       this.projects[existingIdx] = { ...this.projects[existingIdx], ...fullProj };
+      this.saveToDisk();
       return this.projects[existingIdx];
     } else {
       this.projects.push(fullProj);
+      this.saveToDisk();
       return fullProj;
     }
   }
@@ -1864,6 +1948,7 @@ export class ErogaAIDatabase {
   deleteProject(orgId: string, id: string): boolean {
     const initialLen = this.projects.length;
     this.projects = this.projects.filter(p => !(p.organization_id === orgId && p.id === id));
+    this.saveToDisk();
     return this.projects.length < initialLen;
   }
 
@@ -1889,9 +1974,11 @@ export class ErogaAIDatabase {
 
     if (existingIdx !== -1) {
       this.vehicles[existingIdx] = { ...this.vehicles[existingIdx], ...fullVeh };
+      this.saveToDisk();
       return this.vehicles[existingIdx];
     } else {
       this.vehicles.push(fullVeh);
+      this.saveToDisk();
       return fullVeh;
     }
   }
@@ -1899,6 +1986,7 @@ export class ErogaAIDatabase {
   deleteVehicle(orgId: string, id: string): boolean {
     const initialLen = this.vehicles.length;
     this.vehicles = this.vehicles.filter(v => !(v.organization_id === orgId && v.id === id));
+    this.saveToDisk();
     return this.vehicles.length < initialLen;
   }
 
@@ -1921,6 +2009,7 @@ export class ErogaAIDatabase {
     if (this.auditLogs.length > 500) {
       this.auditLogs.pop();
     }
+    this.saveToDisk();
     return newLog;
   }
 
