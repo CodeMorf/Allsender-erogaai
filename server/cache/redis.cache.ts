@@ -26,6 +26,16 @@ export class RedisCacheService implements CacheService {
           maxRetriesPerRequest: 1,
           lazyConnect: true
         });
+        // ioredis emits connection failures asynchronously as well as through
+        // connect(). Always consume the event so an optional Redis outage can
+        // fall back safely instead of terminating the Node process.
+        this.redis.on('error', (err: any) => {
+          if (isRequired) {
+            console.error('[Cache] Redis required connection error:', err?.message || err);
+          } else {
+            this.redis = null;
+          }
+        });
         const connectionAttempt = this.redis.connect().then(() => undefined).catch((err: any) => {
           if (!isRequired) {
             console.warn('[Cache] Redis connection failed. Falling back to MemoryCache:', err.message);
