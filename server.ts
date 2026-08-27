@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import cookieParser from 'cookie-parser';
 import { createServer as createViteServer } from 'vite';
 import { db, officialApiScopes } from './server/db.ts';
 import { 
@@ -8,13 +9,20 @@ import {
   validateFiscalData,
   ReceiptImage
 } from './server/ai-providers.ts';
+import { 
+  registerHandler, 
+  loginHandler, 
+  logoutHandler, 
+  forgotPasswordHandler 
+} from './server/auth.ts';
 import { ExpenseRecord } from './src/types.ts';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // JSON Body Parser with high limit for image payloads
+  // Cookie Parser & JSON Body Parser
+  app.use(cookieParser());
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
@@ -29,30 +37,55 @@ async function startServer() {
 
   // Session & Auth
   app.get('/api/session', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const org = db.getOrganizationById(orgId) || db.getOrganizations()[0];
+    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+    }
+
+    const sessionData = db.validateSessionToken(token);
+    if (!sessionData || !sessionData.user) {
+      res.clearCookie('eroga_session');
+      return res.json({ organization: null, companies: [], branches: [], users: [], currentUser: null });
+    }
+
+    const orgId = sessionData.organization_id;
+    const org = db.getOrganizationById(orgId);
     const companies = db.getCompanies(orgId);
     const branches = db.getBranches(orgId);
     const users = db.getUsers(orgId);
-    const currentUser = users[0] || null;
+
     res.json({
       organization: org,
       companies,
       branches,
       users,
-      currentUser
+      currentUser: sessionData.user
     });
   });
 
   app.get('/api/auth/me', (req, res) => {
-    const orgId = (req.query.orgId as string) || 'org_allsender_corp';
-    const org = db.getOrganizationById(orgId) || db.getOrganizations()[0];
-    const users = db.getUsers(orgId);
+    const token = req.cookies?.eroga_session || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.json({ user: null, organization: null });
+    }
+
+    const sessionData = db.validateSessionToken(token);
+    if (!sessionData || !sessionData.user) {
+      res.clearCookie('eroga_session');
+      return res.json({ user: null, organization: null });
+    }
+
+    const org = db.getOrganizationById(sessionData.organization_id);
     res.json({
-      user: users[0] || null,
+      user: sessionData.user,
       organization: org
     });
   });
+
+  app.post('/api/auth/register', registerHandler);
+  app.post('/api/auth/login', loginHandler);
+  app.post('/api/auth/logout', logoutHandler);
+  app.post('/api/auth/forgot-password', forgotPasswordHandler);
 
   // Organizations
   app.get('/api/organizations', (req, res) => {

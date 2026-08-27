@@ -313,7 +313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCurrentCompany(compList[0] || null);
             setCurrentBranch(branchList[0] || null);
             setUsers(Array.isArray(data.users) ? data.users : []);
-            setCurrentUser(data.currentUser || data.users?.[0] || null);
+            setCurrentUser(data.currentUser || null);
           }
         } catch (parseErr) {
           console.warn('Session JSON parse error:', parseErr);
