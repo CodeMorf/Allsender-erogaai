@@ -175,7 +175,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-950 to-emerald-700 text-white shadow-lg shadow-emerald-950/20 mb-2">
             <ShieldCheck className="w-8 h-8" />
           </div>
-          <h1 className="text-2xl font-black tracking-tight text-slate-950">ErogaAI SaaS</h1>
+          <h1 className="text-2xl font-black tracking-tight text-slate-950">ErogaAI</h1>
           <p className="text-xs text-slate-500">
             {mode === 'login' && 'Plataforma Inteligente de Gestión Fiscal DGII'}
             {mode === 'register' && 'Crea tu Organización y Registro Empresarial'}
