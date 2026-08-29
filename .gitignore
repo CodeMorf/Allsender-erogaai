@@ -10,6 +10,7 @@ coverage/
 !.env.example
 data/*.json
 data/tesseract/
+*.traineddata
 prisma/*.db
 prisma/*.db-journal
 test-results/

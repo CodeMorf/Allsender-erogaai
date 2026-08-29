@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
+import { createWorker, PSM, type Worker as TesseractWorker } from 'tesseract.js';
+import sharp from 'sharp';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseReceiptLineItems } from './services/receipt-line-parser.service.ts';
@@ -48,7 +49,7 @@ export { validateFiscalData };
 const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. Responde únicamente JSON válido.`;
 
 function imageAsDataUrl(image: ReceiptImage): string {
-  return image.base64Data.startsWith('data:')
+  return image.base64Data.startsWith('data:') || /^https?:\/\//i.test(image.base64Data)
     ? image.base64Data
     : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
 }
@@ -98,6 +99,55 @@ const getLocalOCRWorker = async (): Promise<TesseractWorker> => {
   return localOCRWorkerPromise;
 };
 
+async function readReceiptImageBuffer(image: ReceiptImage): Promise<Buffer> {
+  const payload = imageAsDataUrl(image);
+  if (payload.startsWith('data:')) {
+    const encoded = payload.match(/^data:[^;]+;base64,([\s\S]+)$/)?.[1];
+    if (!encoded) throw new Error('La imagen del comprobante no contiene Base64 válido.');
+    return Buffer.from(encoded, 'base64');
+  }
+  if (/^https?:\/\//i.test(payload)) {
+    const response = await fetch(payload);
+    if (!response.ok) throw new Error(`No se pudo descargar la imagen del comprobante (HTTP ${response.status}).`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+  return Buffer.from(payload, 'base64');
+}
+
+async function prepareLocalOCRImage(image: ReceiptImage): Promise<Buffer> {
+  const source = await readReceiptImageBuffer(image);
+
+  return sharp(source, { failOn: 'none' })
+    .rotate()
+    .trim()
+    .resize({ width: 2200, withoutEnlargement: false })
+    .grayscale()
+    .normalize()
+    .sharpen({ sigma: 1 })
+    .png()
+    .toBuffer();
+}
+
+async function prepareLocalOCRReceiptCrops(image: ReceiptImage): Promise<Buffer[]> {
+  const rotatedSource = await sharp(await readReceiptImageBuffer(image), { failOn: 'none' }).rotate().toBuffer();
+  const metadata = await sharp(rotatedSource).metadata();
+  const width = metadata.width || 0;
+  const height = metadata.height || 0;
+  if (!width || !height || height <= width * 1.7) return [];
+
+  const left = Math.round(width * 0.08);
+  const cropWidth = Math.max(1, Math.round(width * 0.84));
+  const headerHeight = Math.max(1, Math.round(height * 0.38));
+  const bodyTop = Math.round(height * 0.28);
+  const bodyHeight = Math.max(1, Math.min(height - bodyTop, Math.round(height * 0.45)));
+  return Promise.all([
+    sharp(rotatedSource).extract({ left, top: 0, width: cropWidth, height: headerHeight }).resize({ width: 2200, withoutEnlargement: false }).grayscale().normalize().sharpen({ sigma: 1 }).png().toBuffer(),
+    // Preserve the original receipt pixels for the body. On thermal paper,
+    // aggressive contrast/sharpening can turn aligned amount columns into noise.
+    sharp(rotatedSource).extract({ left, top: bodyTop, width: cropWidth, height: bodyHeight }).resize({ width: 2200, withoutEnlargement: false }).png().toBuffer()
+  ]);
+}
+
 const parseMoneyValue = (rawValue?: string): number => {
   if (!rawValue) return 0;
   let value = rawValue.replace(/[^0-9,.-]/g, '');
@@ -125,28 +175,133 @@ const parseMoneyValue = (rawValue?: string): number => {
 };
 
 const findLabeledAmount = (lines: string[], pattern: RegExp): number => {
-  const line = lines.find(candidate => pattern.test(candidate));
-  if (!line) return 0;
-  const values = line.match(/-?\d[\d.,]*/g) || [];
-  return parseMoneyValue(values.at(-1));
+  const directLine = lines.find(candidate => pattern.test(candidate) && /-?\d[\d.,]*[.,]\d{2}\b/.test(candidate));
+  if (directLine) {
+    const values = directLine.match(/-?\d[\d.,]*[.,]\d{2}\b/g) || [];
+    return parseMoneyValue(values.at(-1));
+  }
+
+  // Some POS printers put the label and amount on consecutive lines.
+  const labelIndex = lines.findIndex(candidate => pattern.test(candidate));
+  const followingLine = labelIndex >= 0 ? lines[labelIndex + 1] : '';
+  if (followingLine && /^\s*-?\d[\d.,]*[.,]\d{2}\s*$/.test(followingLine)) {
+    return parseMoneyValue(followingLine);
+  }
+  return 0;
 };
 
 const normalizeReceiptDate = (rawValue?: string): string => {
-  if (!rawValue) return new Date().toISOString().split('T')[0];
+  if (!rawValue) return '';
   const clean = rawValue.trim();
 
   const isoMatch = clean.match(/(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+    }
   }
 
   const localMatch = clean.match(/(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})/);
   if (localMatch) {
-    return `${localMatch[3]}-${localMatch[2].padStart(2, '0')}-${localMatch[1].padStart(2, '0')}`;
+    const first = Number(localMatch[1]);
+    const second = Number(localMatch[2]);
+    const month = first > 12 ? second : second > 12 ? first : second;
+    const day = first > 12 ? first : second > 12 ? second : first;
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${localMatch[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
   }
 
-  return new Date().toISOString().split('T')[0];
+  return '';
 };
+
+const isSupplierNameCandidate = (line: string): boolean => {
+  if (line.length < 3 || line.length > 90) return false;
+  if ((line.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length < 3) return false;
+  return !/(R\.?\s*N\.?\s*C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TEL\b|TEL[EÉ]FONO|FECHA|EMISI[ÓO]N|SUBTOTAL|ITBIS|TOTAL|CAMBIO|CAJERO|CALLE|AV(?:ENIDA)?\.?|DIRECCI[ÓO]N|SECTOR|CIUDAD|SANTO\s+DOMINGO|MESA|SERV\b|RAZ[ÓO]N\s+SOCIAL|CLIENTE|DIRECCION|HORA|FIRMA|CODIGO\s+DE\s+SEGURIDAD)/i.test(line);
+};
+
+const receiptQuality = (extraction: ReceiptExtraction): number => (
+  (extraction.supplier_name ? 10 : 0)
+  + (extraction.supplier_rnc ? 20 : 0)
+  + (extraction.ncf ? 25 : 0)
+  + (extraction.date ? 10 : 0)
+  + (extraction.subtotal > 0 ? 10 : 0)
+  + (extraction.itbis_amount > 0 ? 5 : 0)
+  + (extraction.total_amount > 0 ? 20 : 0)
+  + (extraction.line_items.length > 0 ? 25 : 0)
+  + extraction.confidence_score / 10
+);
+
+function supplierCandidateQuality(value: string): number {
+  const text = (value || '').trim();
+  if (!text) return 0;
+  const letters = (text.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length;
+  const usefulCharacters = (text.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,&'/-]/g) || []).length;
+  return letters + Math.min(20, usefulCharacters / Math.max(text.length, 1) * 20);
+}
+
+function mergeLocalExtractions(base: ReceiptExtraction, supplement: ReceiptExtraction): ReceiptExtraction {
+  const preferText = (current: string, additional: string): string => current || additional;
+  const preferNumber = (current: number, additional: number): number => current > 0 ? current : additional;
+  const supplementSubtotal = supplement.subtotal > 0
+    && (supplement.total_amount > supplement.subtotal + 0.01
+      || (supplement.itbis_amount > 0 && Math.abs(supplement.subtotal + supplement.itbis_amount - supplement.total_amount) <= 0.02))
+    ? supplement.subtotal
+    : 0;
+  const supplierName = supplierCandidateQuality(supplement.supplier_name) > supplierCandidateQuality(base.supplier_name)
+    ? supplement.supplier_name
+    : base.supplier_name;
+  const lineItems = supplement.line_items.length > base.line_items.length
+    ? supplement.line_items
+    : base.line_items;
+  return {
+    ...base,
+    supplier_name: supplierName,
+    supplier_rnc: preferText(base.supplier_rnc, supplement.supplier_rnc),
+    ncf: preferText(base.ncf, supplement.ncf),
+    date: preferText(base.date, supplement.date),
+    ncf_type: base.ncf ? base.ncf_type : supplement.ncf_type,
+    subtotal: preferNumber(base.subtotal, supplementSubtotal),
+    itbis_amount: preferNumber(base.itbis_amount, supplement.itbis_amount),
+    legal_tip_amount: preferNumber(base.legal_tip_amount, supplement.legal_tip_amount),
+    total_amount: preferNumber(base.total_amount, supplement.total_amount),
+    line_items: lineItems,
+    confidence_score: Math.min(74, Math.max(base.confidence_score, supplement.confidence_score)),
+    raw_text: [base.raw_text, supplement.raw_text].filter(Boolean).join('\n'),
+    observations: [...new Set([
+      ...(base.observations || []),
+      ...(supplement.observations || []),
+      'Se combinó OCR de cuerpo/encabezado por la longitud del comprobante; revise los campos antes de aprobar.'
+    ])]
+  };
+}
+
+function reconcileSingleLocalItem(
+  lineItems: ReceiptExtraction['line_items'],
+  subtotal: number,
+  itbisAmount: number,
+  legalTipAmount: number,
+  otherTaxes: number,
+  totalAmount: number
+): ReceiptExtraction['line_items'] {
+  if (lineItems.length !== 1 || subtotal <= 0 || totalAmount <= 0) return lineItems;
+  const item = lineItems[0];
+  const expectedTotal = subtotal + itbisAmount + legalTipAmount + otherTaxes;
+  const itemLooksLikeGrandTotal = item.total === 0 || Math.abs(item.total - totalAmount) <= 0.02;
+  if (!itemLooksLikeGrandTotal || Math.abs(expectedTotal - totalAmount) > 0.02) return lineItems;
+  const quantity = item.quantity > 0 ? item.quantity : 1;
+  return [{
+    ...item,
+    quantity,
+    unit_price: Number((subtotal / quantity).toFixed(2)),
+    total: Number(subtotal.toFixed(2)),
+    ...(itbisAmount > 0 ? { itbis_amount: Number(itbisAmount.toFixed(2)) } : {}),
+    confidence: Math.min(item.confidence ?? 70, 70)
+  }];
+}
 
 export function parseLocalOCRText(rawText: string, confidence: number = 0, segmentIndex = 0): ReceiptExtraction {
   const lines = rawText
@@ -157,19 +312,23 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
 
   const rncMatch = normalizedText.match(/(?:R\.?N\.?C\.?|C[EÉ]DULA)\s*[:#-]?\s*([0-9-]{9,15})/i);
   const ncfMatch = normalizedText.match(/(?:E?-?NCF\s*[:#-]?\s*)?\b((?:B(?:01|02|11|14|15|16)|E(?:31|32|44|45))[\s-]*\d{8,10})\b/i);
-  const dateLine = lines.find(line => /\bFECHA\b/i.test(line)) || normalizedText;
+  const dateLine = lines.find(line => /\b(?:FECHA|EMISI[ÓO]N|DATE)\b/i.test(line) && /\b\d{1,2}[-/.]\d{1,2}[-/.]20\d{2}\b/.test(line))
+    || lines.find(line => /\b\d{1,2}[-/.]\d{1,2}[-/.]20\d{2}\b/.test(line))
+    || '';
 
-  const supplierName = lines.find(line => {
-    if (line.length < 3 || line.length > 90) return false;
-    if ((line.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length < 3) return false;
-    return !/(R\.?N\.?C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TEL[EÉ]FONO|FECHA|SUBTOTAL|ITBIS|TOTAL|CAMBIO|CAJERO)/i.test(line);
-  }) || '';
+  const rncIndex = lines.findIndex(line => /(?:R\.?\s*N\.?\s*C\.?|C[EÉ]DULA)/i.test(line));
+  const supplierName = (rncIndex >= 0
+    ? lines.slice(0, rncIndex).reverse().find(isSupplierNameCandidate)
+    : undefined)
+    || lines.find(isSupplierNameCandidate)
+    || '';
 
-  const subtotal = findLabeledAmount(lines, /\bSUB\s*TOTAL\b/i);
-  const itbisAmount = findLabeledAmount(lines, /\bITBIS\b/i);
+  const subtotal = findLabeledAmount(lines, /\b(?:SUB\s*TOTAL|TOTAL\s+NETO)\b/i);
+  const itbisAmount = findLabeledAmount(lines, /\bITBIS\b/i)
+    || findLabeledAmount(lines, /^(?:\s*(?:IBIS|IVA|TAX)\b|\s*US\s+(?!\$))/i);
   const legalTipAmount = findLabeledAmount(lines, /\b(?:PROPINA|LEY\s*54-32)\b/i);
   const totalAmount = findLabeledAmount(lines, /\b(?:TOTAL\s+(?:A\s+PAGAR|GENERAL)|MONTO\s+TOTAL)\b/i)
-    || findLabeledAmount(lines.filter(line => !/SUB\s*TOTAL/i.test(line)), /^\s*TOTAL\b/i);
+    || findLabeledAmount(lines.filter(line => !/\b(?:SUB\s*TOTAL|TOTAL\s+NETO|TOTAL\s+DE\s+ART[IÍ]CULOS?)\b/i.test(line)), /^\s*TOTAL\b(?!\s+(?:NETO|DE\s+ART[IÍ]CULOS?))/i);
   const resolvedSubtotal = subtotal || Math.max(0, totalAmount - itbisAmount - legalTipAmount);
 
   const normalizedNcf = (ncfMatch?.[1] || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
@@ -178,7 +337,14 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
   const ncfType = supportedNcfTypes.includes(detectedNcfType as NcfType)
     ? detectedNcfType as NcfType
     : 'B01';
-  const lineItems = parseReceiptLineItems(rawText, segmentIndex);
+  const lineItems = reconcileSingleLocalItem(
+    parseReceiptLineItems(rawText, segmentIndex),
+    resolvedSubtotal,
+    itbisAmount,
+    legalTipAmount,
+    0,
+    totalAmount
+  );
   const structuralScore = Math.min(100,
     (supplierName ? 10 : 0)
     + (rncMatch ? 20 : 0)
@@ -223,8 +389,60 @@ export async function extractWithLocalOCR(image: ReceiptImage, segmentIndex = 0)
 
   const task = localOCRQueue.then(async () => {
     const worker = await getLocalOCRWorker();
-    const result = await worker.recognize(image.base64Data);
-    return parseLocalOCRText(result.data.text || '', result.data.confidence || 0, segmentIndex);
+    const recognizeWithMode = async (
+      input: Buffer | string,
+      pageSegmentationMode: PSM.AUTO | PSM.SINGLE_BLOCK
+    ): Promise<ReceiptExtraction> => {
+      await worker.setParameters({ tessedit_pageseg_mode: pageSegmentationMode });
+      const result = await worker.recognize(input);
+      return parseLocalOCRText(result.data.text || '', result.data.confidence || 0, segmentIndex);
+    };
+
+    const originalInput = imageAsDataUrl(image);
+    const primary = await recognizeWithMode(originalInput, PSM.AUTO);
+    const candidates = [primary];
+    const needsRetry = (extraction: ReceiptExtraction) => extraction.confidence_score < Number(process.env.LOCAL_OCR_CONFIDENCE_THRESHOLD || 78)
+      || !extraction.supplier_rnc
+      || !extraction.ncf
+      || extraction.total_amount <= 0
+      || extraction.line_items.length === 0;
+
+    if (needsRetry(primary)) {
+      candidates.push(await recognizeWithMode(originalInput, PSM.SINGLE_BLOCK));
+    }
+
+    const bestOriginal = candidates.reduce((best, candidate) => (
+      receiptQuality(candidate) > receiptQuality(best) ? candidate : best
+    ), primary);
+    if (bestOriginal.total_amount > 0 && bestOriginal.line_items.length > 0 && bestOriginal.confidence_score >= 78) {
+      return bestOriginal;
+    }
+
+    try {
+      const enhancedInput = await prepareLocalOCRImage(image);
+      candidates.push(await recognizeWithMode(enhancedInput, PSM.AUTO));
+      const bestEnhanced = candidates.at(-1)!;
+      if (needsRetry(bestEnhanced)) candidates.push(await recognizeWithMode(enhancedInput, PSM.SINGLE_BLOCK));
+
+      const cropInputs = await prepareLocalOCRReceiptCrops(image);
+      if (cropInputs.length > 0) {
+        // Long thermal receipts often lose their middle columns when OCR runs
+        // over the entire photo. Read the header and body separately, then
+        // merge only fields that the full-document OCR did not find.
+        let mergedCropExtraction = bestOriginal;
+        for (const cropInput of cropInputs) {
+          const cropResult = await recognizeWithMode(cropInput, PSM.SINGLE_BLOCK);
+          mergedCropExtraction = mergeLocalExtractions(mergedCropExtraction, cropResult);
+          candidates.push(mergedCropExtraction);
+        }
+      }
+    } catch (error: any) {
+      console.warn(`[Local OCR] No se pudo mejorar la imagen; se conservará la mejor lectura original: ${error.message}`);
+    }
+
+    return candidates.reduce((best, candidate) => (
+      receiptQuality(candidate) > receiptQuality(best) ? candidate : best
+    ), primary);
   });
 
   localOCRQueue = task.then(() => undefined, () => undefined);

@@ -2,8 +2,37 @@ import type { ReceiptExtraction } from '../../src/types.ts';
 
 export type ParsedReceiptLineItem = ReceiptExtraction['line_items'][number];
 
-const FOOTER_OR_HEADER = /^(?:R\.?N\.?C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TICKET|FECHA|TEL[EÉ]FONO|DIRECCI[OÓ]N|CAJER[OA]|SUB\s*TOTAL|TOTAL|ITBIS|IMPUESTO|PROPINA|DESCUENTO|CAMBIO|EFECTIVO|TARJETA|PAGO)\b/i;
+const FOOTER_OR_HEADER = /^(?:R\.?\s*N\.?\s*C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TICKET|FECHA|TEL(?:[ÉE]FONO)?|DIRECCI[OÓ]N|CALLE|AV(?:ENIDA)?\.?|CAJER[OA]|SUB\s*TOTAL|TOTAL|ITBIS|IBIS|IVA|TAX|MAS\s+(?:ITBIS|IBIS)|IMPUESTO|PROPINA|DESCUENTO|CAMBIO|EFECTIVO|TARJETA|PAGO|CANT(?:IDAD)?|DESCRIPC|UNIDAD|UND|VTA|COSTO|PRECIO|IMPORTE|SECTOR|CIUDAD|US|RD|DOP|USD)\b/i;
 const MONEY_TOKEN = String.raw`\d[\d.,]*[.,]\d{2}`;
+
+function normalizeLineForParsing(line: string): string {
+  return (line || '')
+    .replace(/["'|]/g, '')
+    .replace(/(?:RD|DOP|USD?|US)\s*\$/gi, '')
+    .replace(/\$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function decimalTokens(line: string): number[] {
+  return (line.match(new RegExp(MONEY_TOKEN, 'g')) || []).map(parseReceiptMoney);
+}
+
+function leadingQuantity(value: string): { quantity: number; description: string } | null {
+  const match = value.trim().match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/);
+  if (!match) return null;
+  const quantity = parseReceiptMoney(match[1]);
+  return quantity > 0 ? { quantity, description: match[2].trim() } : null;
+}
+
+function parseQuantityDetailRow(line: string): { quantity: number; values: number[] } | null {
+  const normalized = normalizeLineForParsing(line);
+  const match = normalized.match(/^(\d+(?:[.,]\d+)?)\s+(?:UNIDAD(?:ES)?|UNID?\.?|UND(?:AD)?\.?|NIDAD|PZA|PCS?)(?:\s+|$)(.*)$/i);
+  if (!match) return null;
+  const quantity = parseReceiptMoney(match[1]);
+  const values = decimalTokens(match[2]);
+  return quantity > 0 && values.length > 0 ? { quantity, values } : null;
+}
 
 export function parseReceiptMoney(raw: string): number {
   let value = (raw || '').replace(/[^0-9,.-]/g, '');
@@ -50,6 +79,7 @@ function createItem(input: {
   quantity?: number;
   unitPrice?: number;
   total: number;
+  itbisAmount?: number;
   rawText: string;
   segmentIndex: number;
   confidence: number;
@@ -57,9 +87,11 @@ function createItem(input: {
 }): ParsedReceiptLineItem | null {
   const split = splitSku(input.description);
   const description = split.description.replace(/\s+/g, ' ').trim();
-  if (!validDescription(description) || input.total <= 0) return null;
+  if (!validDescription(description) || !Number.isFinite(input.total) || input.total < 0) return null;
   const quantity = input.quantity && input.quantity > 0 ? input.quantity : 1;
-  const unitPrice = input.unitPrice && input.unitPrice > 0 ? input.unitPrice : input.total / quantity;
+  const unitPrice = input.unitPrice !== undefined && Number.isFinite(input.unitPrice) && input.unitPrice >= 0
+    ? input.unitPrice
+    : input.total / quantity;
   return {
     description,
     sku: input.sku || split.sku,
@@ -67,6 +99,7 @@ function createItem(input: {
     unit_price: Number(unitPrice.toFixed(2)),
     itbis_rate: 0,
     total: Number(input.total.toFixed(2)),
+    ...(input.itbisAmount !== undefined && input.itbisAmount > 0 ? { itbis_amount: Number(input.itbisAmount.toFixed(2)) } : {}),
     segment_index: input.segmentIndex,
     confidence: Math.max(20, Math.min(98, Math.round(input.confidence))),
     raw_text: input.rawText
@@ -76,7 +109,7 @@ function createItem(input: {
 export function parseReceiptLineItems(rawText: string, segmentIndex = 0): ParsedReceiptLineItem[] {
   const lines = (rawText || '')
     .split(/\r?\n/)
-    .map(line => line.replace(/\s+/g, ' ').trim())
+    .map(normalizeLineForParsing)
     .filter(Boolean);
   const items: ParsedReceiptLineItem[] = [];
 
@@ -84,11 +117,61 @@ export function parseReceiptLineItems(rawText: string, segmentIndex = 0): Parsed
     const line = lines[index];
     if (FOOTER_OR_HEADER.test(line)) continue;
 
+    // POS layouts often print the description on one line and the quantity/unit
+    // row immediately below it, e.g. "TORNILLO..." + "20 UNIDAD 45.80 300.00".
+    const nextDetail = index + 1 < lines.length ? parseQuantityDetailRow(lines[index + 1]) : null;
+    if (validDescription(line) && nextDetail) {
+      const total = nextDetail.values.at(-1) || 0;
+      const item = createItem({
+        description: line,
+        quantity: nextDetail.quantity,
+        unitPrice: total / nextDetail.quantity,
+        total,
+        rawText: `${line}\n${lines[index + 1]}`,
+        segmentIndex,
+        confidence: 72
+      });
+      if (item) items.push(item);
+      index += 1;
+      continue;
+    }
+
+    // OCR can emit the amount on a separate line from the description.
+    if (validDescription(line) && index + 1 < lines.length) {
+      const amountLine = lines[index + 1];
+      const amounts = decimalTokens(amountLine);
+      if (amounts.length === 1 && /^\s*\d[\d.,]*[.,]\d{2}\s*$/i.test(amountLine)) {
+        const quantityData = leadingQuantity(line);
+        const item = createItem({
+          description: quantityData?.description || line,
+          quantity: quantityData?.quantity,
+          total: amounts[0],
+          rawText: `${line}\n${amountLine}`,
+          segmentIndex,
+          confidence: 62
+        });
+        if (item) items.push(item);
+        index += 1;
+        continue;
+      }
+    }
+
     // 2 COCA COLA 2LT 95.00 190.00
     let match = line.match(new RegExp(`^(\\d+(?:[.,]\\d+)?)\\s+(.+?)\\s+(${MONEY_TOKEN})\\s+(${MONEY_TOKEN})$`, 'i'));
     if (match) {
       const quantity = parseReceiptMoney(match[1]);
       const item = createItem({ description: match[2], quantity, unitPrice: parseReceiptMoney(match[3]), total: parseReceiptMoney(match[4]), rawText: line, segmentIndex, confidence: 92 });
+      if (item) items.push(item);
+      continue;
+    }
+
+    // 3 AGUA DASANI 150.00 or 2 ROLLO PECHURINITAS 669.48.
+    // The amount is the line total; derive unit price from the quantity.
+    match = line.match(new RegExp(`^(\\d+(?:[.,]\\d+)?)\\s+(.+?)\\s+(${MONEY_TOKEN})$`, 'i'));
+    if (match && !/^\d{4,}\s+/.test(line)) {
+      const quantity = parseReceiptMoney(match[1]);
+      const total = parseReceiptMoney(match[3]);
+      const item = createItem({ description: match[2], quantity, total, rawText: line, segmentIndex, confidence: 78 });
       if (item) items.push(item);
       continue;
     }
@@ -133,7 +216,16 @@ export function parseReceiptLineItems(rawText: string, segmentIndex = 0): Parsed
     match = line.match(new RegExp(`^(.+?)\\s+(${MONEY_TOKEN})$`, 'i'));
     if (match && validDescription(match[1])) {
       const total = parseReceiptMoney(match[2]);
-      const item = createItem({ description: match[1], quantity: 1, unitPrice: total, total, rawText: line, segmentIndex, confidence: 55 });
+      const quantityData = leadingQuantity(match[1]);
+      const item = createItem({
+        description: quantityData?.description || match[1],
+        quantity: quantityData?.quantity,
+        unitPrice: quantityData ? total / quantityData.quantity : total,
+        total,
+        rawText: line,
+        segmentIndex,
+        confidence: 55
+      });
       if (item) items.push(item);
     }
   }

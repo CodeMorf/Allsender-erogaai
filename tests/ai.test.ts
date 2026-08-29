@@ -60,4 +60,34 @@ describe('AI & Fiscal Validation Rules', () => {
     expect(result.confidence_score).toBe(78);
     expect(result.observations?.[0]).toContain('Tesseract.js');
   });
+
+  it('does not invent today as the receipt date when OCR did not find one', () => {
+    const result = parseLocalOCRText(`
+      SUPPLIER WITHOUT DATE
+      RNC: 101-12345-6
+      NCF: B0100000123
+      TOTAL: RD$ 100.00
+    `, 82);
+
+    expect(result.date).toBe('');
+  });
+
+  it('reads an OCR tax label variant and a value printed on the following line', () => {
+    const result = parseLocalOCRText(`
+      F. MADE CENTRAL, SRL
+      RNC: 101-19154-5
+      FECHA:
+      28/08/2026
+      SUBTOTAL
+      254.20
+      US 45.80
+      TOTAL
+      300.00
+    `, 70);
+
+    expect(result.date).toBe('2026-08-28');
+    expect(result.subtotal).toBe(254.2);
+    expect(result.itbis_amount).toBe(45.8);
+    expect(result.total_amount).toBe(300);
+  });
 });
