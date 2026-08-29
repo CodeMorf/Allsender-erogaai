@@ -169,13 +169,23 @@ export function reconcileReceiptMath(extraction: ReceiptExtraction): ReceiptMath
   const itemItbis = lineItems.reduce((sum, item) => sum + (Number.isFinite(Number(item.itbis_amount)) ? Number(item.itbis_amount) : 0), 0);
   const declaredItbis = Number(extraction.itbis_amount || 0);
   const itbis = declaredItbis !== 0 || itemItbis === 0 ? declaredItbis : itemItbis;
-  const calculated = base
-    + itbis
+  const expected = Number(extraction.total_amount || 0);
+  const tolerance = 0.02;
+  const additionalCharges = itbis
     + Number(extraction.legal_tip_amount || 0)
     + Number(extraction.other_taxes || 0);
-  const expected = Number(extraction.total_amount || 0);
+  const calculatedWithCharges = base + additionalCharges;
+  // Fiscal documents do not always show the full ITBIS as an amount to add to
+  // the subtotal: it may already be included in the declared total or only a
+  // partial amount may apply. Preserve the printed values and do not report a
+  // false total by adding the tax a second time.
+  const taxesIncludedInTotal = expected > 0
+    && additionalCharges > 0
+    && expected >= base - tolerance
+    && expected <= calculatedWithCharges + tolerance
+    && Math.abs(expected - calculatedWithCharges) > tolerance;
+  const calculated = taxesIncludedInTotal ? expected : calculatedWithCharges;
   const difference = Number((expected - calculated).toFixed(2));
-  const tolerance = 0.02;
   const subtotalDifference = lineItems.length > 0 && declaredSubtotal > 0
     ? Number((declaredSubtotal - lineItemsTotal).toFixed(2))
     : 0;
@@ -193,6 +203,7 @@ export function reconcileReceiptMath(extraction: ReceiptExtraction): ReceiptMath
     tolerance,
     line_items_total: Number(lineItemsTotal.toFixed(2)),
     discounts: Number(discounts.toFixed(2)),
+    taxes_included_in_total: taxesIncludedInTotal,
     probable_segment_indexes: probableSegments
   };
 }

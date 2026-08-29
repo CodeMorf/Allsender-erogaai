@@ -514,6 +514,7 @@ export interface ReceiptMathReconciliation {
   tolerance: number;
   line_items_total: number;
   discounts: number;
+  taxes_included_in_total?: boolean;
   probable_segment_indexes: number[];
 }
 

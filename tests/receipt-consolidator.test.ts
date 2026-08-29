@@ -93,6 +93,19 @@ describe('receipt mathematical reconciliation', () => {
     expect(result.is_valid).toBe(true);
   });
 
+  it('does not add ITBIS a second time when the printed total includes only the applicable tax', () => {
+    const result = reconcileReceiptMath(base({
+      subtotal: 300,
+      itbis_amount: 45.80,
+      total_amount: 300
+    }));
+    expect(result.is_valid).toBe(true);
+    expect(result.expected_total).toBe(300);
+    expect(result.calculated_total).toBe(300);
+    expect(result.difference).toBe(0);
+    expect(result.taxes_included_in_total).toBe(true);
+  });
+
   it('rejects a material difference and points to low-confidence segments', () => {
     const result = reconcileReceiptMath(base({
       line_items: [{ description: 'BIEN', quantity: 1, unit_price: 1000, itbis_rate: 18, total: 1000, confidence: 40, segment_index: 3 }],
