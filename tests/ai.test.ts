@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateFiscalData, GeminiAIProvider } from '../server/ai-providers.ts';
+import { validateFiscalData, GeminiAIProvider, parseLocalOCRText } from '../server/ai-providers.ts';
 
 describe('AI & Fiscal Validation Rules', () => {
   it('validates Dominican RNC formats correctly', () => {
@@ -37,5 +37,27 @@ describe('AI & Fiscal Validation Rules', () => {
 
     expect(result.status).toBe('INVALID_KEY');
     expect(result.status).not.toBe('ONLINE');
+  });
+
+  it('extracts Dominican receipt fields with the free local OCR parser', () => {
+    const result = parseLocalOCRText(`
+      SUPERMERCADO NACIONAL
+      RNC: 101-12345-6
+      NCF: B0100000123
+      Fecha: 29/08/2026
+      Subtotal RD$ 1,000.00
+      ITBIS RD$ 180.00
+      TOTAL A PAGAR RD$ 1,180.00
+    `, 82);
+
+    expect(result.supplier_name).toBe('SUPERMERCADO NACIONAL');
+    expect(result.supplier_rnc).toBe('101123456');
+    expect(result.ncf).toBe('B0100000123');
+    expect(result.date).toBe('2026-08-29');
+    expect(result.subtotal).toBe(1000);
+    expect(result.itbis_amount).toBe(180);
+    expect(result.total_amount).toBe(1180);
+    expect(result.confidence_score).toBe(70);
+    expect(result.observations?.[0]).toContain('Tesseract.js');
   });
 });

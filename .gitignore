@@ -9,6 +9,7 @@ coverage/
 .env.production
 !.env.example
 data/*.json
+data/tesseract/
 prisma/*.db
 prisma/*.db-journal
 test-results/

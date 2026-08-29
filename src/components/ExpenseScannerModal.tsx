@@ -44,6 +44,7 @@ export const ExpenseScannerModal: React.FC = () => {
   
   // Camera state
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
@@ -87,14 +88,75 @@ export const ExpenseScannerModal: React.FC = () => {
   // stream after that render so the live camera is actually displayed.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !cameraStream || step !== 'CAMERA_ACTIVE') return;
+    const preview = previewCanvasRef.current;
+    if (!video || !preview || !cameraStream || step !== 'CAMERA_ACTIVE') return;
 
     video.srcObject = cameraStream;
-    void video.play().catch((error) => {
+    let animationFrameId: number | null = null;
+    let previewStarted = false;
+
+    const drawPreviewFrame = () => {
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth && video.videoHeight) {
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const targetWidth = Math.max(640, Math.round(preview.clientWidth * pixelRatio));
+        const targetHeight = Math.max(480, Math.round(preview.clientHeight * pixelRatio));
+
+        if (preview.width !== targetWidth || preview.height !== targetHeight) {
+          preview.width = targetWidth;
+          preview.height = targetHeight;
+        }
+
+        const context = preview.getContext('2d');
+        if (context) {
+          const sourceRatio = video.videoWidth / video.videoHeight;
+          const targetRatio = preview.width / preview.height;
+          let sourceX = 0;
+          let sourceY = 0;
+          let sourceWidth = video.videoWidth;
+          let sourceHeight = video.videoHeight;
+
+          if (sourceRatio > targetRatio) {
+            sourceWidth = video.videoHeight * targetRatio;
+            sourceX = (video.videoWidth - sourceWidth) / 2;
+          } else if (sourceRatio < targetRatio) {
+            sourceHeight = video.videoWidth / targetRatio;
+            sourceY = (video.videoHeight - sourceHeight) / 2;
+          }
+
+          context.drawImage(
+            video,
+            sourceX,
+            sourceY,
+            sourceWidth,
+            sourceHeight,
+            0,
+            0,
+            preview.width,
+            preview.height
+          );
+        }
+      }
+
+      animationFrameId = window.requestAnimationFrame(drawPreviewFrame);
+    };
+
+    const startPreview = () => {
+      if (previewStarted) return;
+      previewStarted = true;
+      drawPreviewFrame();
+    };
+
+    video.addEventListener('playing', startPreview);
+    void video.play().then(startPreview).catch((error) => {
       console.warn('Camera video playback was deferred:', error);
+      setCameraError('Toca nuevamente la cámara para iniciar la vista previa.');
     });
 
     return () => {
+      video.removeEventListener('playing', startPreview);
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
       if (video.srcObject === cameraStream) {
         video.srcObject = null;
       }
@@ -415,7 +477,13 @@ export const ExpenseScannerModal: React.FC = () => {
                   autoPlay
                   playsInline
                   muted
-                  className="w-full h-full object-cover"
+                  aria-hidden="true"
+                  className="absolute inset-0 w-full h-full opacity-0 pointer-events-none"
+                />
+                <canvas
+                  ref={previewCanvasRef}
+                  className="block w-full h-full"
+                  aria-label="Vista previa en vivo de la cámara"
                 />
                 {/* Guide overlay */}
                 <div className="absolute inset-8 border-2 border-dashed border-white/60 rounded-xl pointer-events-none flex items-center justify-center">

@@ -1,4 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import { 
   AIProviderType, 
   ReceiptExtraction, 
@@ -88,6 +91,158 @@ export function validateFiscalData(data: ReceiptData): ValidationResult {
     warnings,
     errors
   };
+}
+
+// ----------------------------------------------------
+// Free Local OCR Fallback (Tesseract.js)
+// ----------------------------------------------------
+export type OCRProviderUsed = AIProviderType | 'TESSERACT';
+
+let localOCRWorkerPromise: Promise<TesseractWorker> | null = null;
+let localOCRQueue: Promise<void> = Promise.resolve();
+
+const getLocalOCRWorker = async (): Promise<TesseractWorker> => {
+  if (!localOCRWorkerPromise) {
+    const cachePath = process.env.TESSERACT_CACHE_PATH || path.join(process.cwd(), 'data', 'tesseract');
+    await mkdir(cachePath, { recursive: true });
+    localOCRWorkerPromise = createWorker(['spa', 'eng'], 1, { cachePath });
+  }
+  return localOCRWorkerPromise;
+};
+
+const parseMoneyValue = (rawValue?: string): number => {
+  if (!rawValue) return 0;
+  let value = rawValue.replace(/[^0-9,.-]/g, '');
+  if (!value) return 0;
+
+  const lastComma = value.lastIndexOf(',');
+  const lastDot = value.lastIndexOf('.');
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    if (lastComma > lastDot) {
+      value = value.replace(/\./g, '').replace(',', '.');
+    } else {
+      value = value.replace(/,/g, '');
+    }
+  } else if (lastComma >= 0) {
+    const decimalLength = value.length - lastComma - 1;
+    value = decimalLength === 2 ? value.replace(',', '.') : value.replace(/,/g, '');
+  } else if (lastDot >= 0) {
+    const decimalLength = value.length - lastDot - 1;
+    if (decimalLength !== 2) value = value.replace(/\./g, '');
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const findLabeledAmount = (lines: string[], pattern: RegExp): number => {
+  const line = lines.find(candidate => pattern.test(candidate));
+  if (!line) return 0;
+  const values = line.match(/-?\d[\d.,]*/g) || [];
+  return parseMoneyValue(values.at(-1));
+};
+
+const normalizeReceiptDate = (rawValue?: string): string => {
+  if (!rawValue) return new Date().toISOString().split('T')[0];
+  const clean = rawValue.trim();
+
+  const isoMatch = clean.match(/(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+
+  const localMatch = clean.match(/(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})/);
+  if (localMatch) {
+    return `${localMatch[3]}-${localMatch[2].padStart(2, '0')}-${localMatch[1].padStart(2, '0')}`;
+  }
+
+  return new Date().toISOString().split('T')[0];
+};
+
+export function parseLocalOCRText(rawText: string, confidence: number = 0): ReceiptExtraction {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const normalizedText = lines.join('\n');
+
+  const rncMatch = normalizedText.match(/(?:R\.?N\.?C\.?|C[EÉ]DULA)\s*[:#-]?\s*([0-9-]{9,15})/i);
+  const ncfMatch = normalizedText.match(/(?:E?-?NCF\s*[:#-]?\s*)?\b((?:B(?:01|02|11|14|15|16)|E(?:31|32|44|45))[\s-]*\d{8,10})\b/i);
+  const dateLine = lines.find(line => /\bFECHA\b/i.test(line)) || normalizedText;
+
+  const supplierName = lines.find(line => {
+    if (line.length < 3 || line.length > 90) return false;
+    if ((line.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length < 3) return false;
+    return !/(R\.?N\.?C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TEL[EÉ]FONO|FECHA|SUBTOTAL|ITBIS|TOTAL|CAMBIO|CAJERO)/i.test(line);
+  }) || '';
+
+  const subtotal = findLabeledAmount(lines, /\bSUB\s*TOTAL\b/i);
+  const itbisAmount = findLabeledAmount(lines, /\bITBIS\b/i);
+  const legalTipAmount = findLabeledAmount(lines, /\b(?:PROPINA|LEY\s*54-32)\b/i);
+  const totalAmount = findLabeledAmount(lines, /\b(?:TOTAL\s+(?:A\s+PAGAR|GENERAL)|MONTO\s+TOTAL)\b/i)
+    || findLabeledAmount(lines.filter(line => !/SUB\s*TOTAL/i.test(line)), /^\s*TOTAL\b/i);
+  const resolvedSubtotal = subtotal || Math.max(0, totalAmount - itbisAmount - legalTipAmount);
+
+  const normalizedNcf = (ncfMatch?.[1] || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const detectedNcfType = normalizedNcf.slice(0, 3);
+  const supportedNcfTypes: NcfType[] = ['B01', 'B02', 'B14', 'B15', 'B16', 'E31', 'E32', 'E44', 'E45'];
+  const ncfType = supportedNcfTypes.includes(detectedNcfType as NcfType)
+    ? detectedNcfType as NcfType
+    : 'B01';
+  const safeConfidence = Math.max(10, Math.min(70, Math.round(confidence || 35)));
+
+  return {
+    supplier_name: supplierName,
+    supplier_rnc: (rncMatch?.[1] || '').replace(/[^0-9]/g, ''),
+    ncf: normalizedNcf,
+    ncf_type: ncfType,
+    date: normalizeReceiptDate(dateLine),
+    subtotal: resolvedSubtotal,
+    itbis_amount: itbisAmount,
+    legal_tip_amount: legalTipAmount,
+    other_taxes: 0,
+    total_amount: totalAmount || resolvedSubtotal + itbisAmount + legalTipAmount,
+    currency: 'DOP',
+    document_type: ncfType === 'B02' || ncfType === 'E32'
+      ? 'FACTURA_CONSUMO'
+      : ncfType.startsWith('E') ? 'COMPROBANTE_ELECTRONICO' : 'FACTURA_CREDITO_FISCAL',
+    suggested_classification: 'GASTO_OPERATIVO',
+    suggested_category: 'Gastos Generales',
+    confidence_score: safeConfidence,
+    line_items: [],
+    raw_text: rawText,
+    observations: [
+      'Extraído con OCR local gratuito (Tesseract.js) porque la IA no estaba disponible.',
+      'Revise RNC, NCF y montos antes de aprobar el comprobante.'
+    ]
+  };
+}
+
+async function extractWithLocalOCR(image: ReceiptImage): Promise<ReceiptExtraction> {
+  if (/pdf/i.test(image.mimeType)) {
+    throw new Error('El OCR local admite imágenes JPG, PNG o WEBP; los PDF requieren un proveedor de IA activo.');
+  }
+
+  const task = localOCRQueue.then(async () => {
+    const worker = await getLocalOCRWorker();
+    const result = await worker.recognize(image.base64Data);
+    return parseLocalOCRText(result.data.text || '', result.data.confidence || 0);
+  });
+
+  localOCRQueue = task.then(() => undefined, () => undefined);
+
+  try {
+    return await task;
+  } catch (error) {
+    const failedWorkerPromise = localOCRWorkerPromise;
+    localOCRWorkerPromise = null;
+    if (failedWorkerPromise) {
+      const failedWorker = await failedWorkerPromise.catch(() => null);
+      await failedWorker?.terminate().catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 // ----------------------------------------------------
@@ -650,14 +805,23 @@ export async function getAIProviderInstance(orgId: string, preferredType?: AIPro
 /**
  * Executes Receipt Extraction with Real Fallback Chain Across Active Providers
  */
-export async function extractWithFallback(orgId: string, image: ReceiptImage): Promise<{ extraction: ReceiptExtraction; providerUsed: AIProviderType; modelUsed: string }> {
+export async function extractWithFallback(orgId: string, image: ReceiptImage): Promise<{ extraction: ReceiptExtraction; providerUsed: OCRProviderUsed; modelUsed: string }> {
   const configs = (await prismaRepo.getAIProviderConfigs(orgId)).filter(c => c.is_active && c.has_key);
 
   if (configs.length === 0) {
-    // Attempt with environment Gemini Key
-    const defaultGemini = new GeminiAIProvider(process.env.GEMINI_API_KEY || '', 'gemini-2.5-flash', orgId);
-    const extraction = await defaultGemini.extractReceiptData(image);
-    return { extraction, providerUsed: 'GEMINI', modelUsed: 'gemini-2.5-flash' };
+    const environmentGeminiKey = process.env.GEMINI_API_KEY || '';
+    if (environmentGeminiKey) {
+      try {
+        const defaultGemini = new GeminiAIProvider(environmentGeminiKey, 'gemini-2.5-flash', orgId);
+        const extraction = await defaultGemini.extractReceiptData(image);
+        return { extraction, providerUsed: 'GEMINI', modelUsed: 'gemini-2.5-flash' };
+      } catch (error: any) {
+        console.warn(`[AI Chain] Environment Gemini failed: ${error.message}. Using local OCR fallback...`);
+      }
+    }
+
+    const extraction = await extractWithLocalOCR(image);
+    return { extraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
   }
 
   // Sort: Primary first, then Fallback
@@ -675,5 +839,10 @@ export async function extractWithFallback(orgId: string, image: ReceiptImage): P
     }
   }
 
-  throw new Error(`Todos los motores de IA configurados fallaron en la extracción: ${lastError?.message || 'Error de credencial u OCR'}`);
+  try {
+    const extraction = await extractWithLocalOCR(image);
+    return { extraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
+  } catch (localError: any) {
+    throw new Error(`Todos los motores de IA y el OCR local fallaron: ${lastError?.message || localError?.message || 'Error de credencial u OCR'}`);
+  }
 }
