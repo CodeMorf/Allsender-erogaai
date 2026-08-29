@@ -83,18 +83,39 @@ export const ExpenseScannerModal: React.FC = () => {
     }
   }, [isScannerOpen]);
 
+  // The video element is mounted only after CAMERA_ACTIVE renders. Attach the
+  // stream after that render so the live camera is actually displayed.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !cameraStream || step !== 'CAMERA_ACTIVE') return;
+
+    video.srcObject = cameraStream;
+    void video.play().catch((error) => {
+      console.warn('Camera video playback was deferred:', error);
+    });
+
+    return () => {
+      if (video.srcObject === cameraStream) {
+        video.srcObject = null;
+      }
+    };
+  }, [cameraStream, step]);
+
   if (!isScannerOpen) return null;
 
   const startCamera = async () => {
     setCameraError(null);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Este navegador no permite acceder a la cámara. Por favor sube una imagen.');
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
       setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
       setStep('CAMERA_ACTIVE');
     } catch (err: any) {
       console.error('Camera error:', err);
@@ -103,13 +124,18 @@ export const ExpenseScannerModal: React.FC = () => {
   };
 
   const captureCameraPhoto = () => {
-    if (!videoRef.current) return;
+    const video = videoRef.current;
+    if (!video || !cameraStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
+      setCameraError('La cámara todavía está iniciando. Espera un momento e inténtalo de nuevo.');
+      return;
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       if (cameraStream) {
         cameraStream.getTracks().forEach(t => t.stop());
@@ -364,6 +390,7 @@ export const ExpenseScannerModal: React.FC = () => {
                   ref={videoRef}
                   autoPlay
                   playsInline
+                  muted
                   className="w-full h-full object-cover"
                 />
                 {/* Guide overlay */}
@@ -373,6 +400,11 @@ export const ExpenseScannerModal: React.FC = () => {
                   </span>
                 </div>
               </div>
+              {cameraError && (
+                <p className="w-full max-w-lg rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs text-amber-800">
+                  {cameraError}
+                </p>
+              )}
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => {
