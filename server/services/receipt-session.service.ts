@@ -107,7 +107,7 @@ export class ReceiptSessionService {
         || !localReconciliation?.is_valid;
 
       if (needsAI && images.length > 0) {
-        const aiResult = await extractReceiptSessionWithAI(orgId, images);
+        const aiResult = await extractReceiptSessionWithAI(orgId, images, finalExtraction);
         if (aiResult) {
           const mergedExtraction = mergeAIWithLocal(finalExtraction, aiResult.extraction);
           const deduplicated = deduplicateAIOverlap({

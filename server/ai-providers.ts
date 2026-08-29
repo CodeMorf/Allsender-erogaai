@@ -37,6 +37,7 @@ export interface AIProvider {
   testConnection(): Promise<AITestResult>;
   extractReceiptData(image: ReceiptImage): Promise<ReceiptExtraction>;
   extractReceiptSessionData?(images: ReceiptImage[]): Promise<ReceiptExtraction>;
+  extractReceiptTextData?(rawText: string, localExtraction?: ReceiptExtraction): Promise<ReceiptExtraction>;
   classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion>;
   validateExtraction(data: ReceiptData): Promise<ValidationResult>;
   getUsage(): Promise<AIUsage>;
@@ -47,6 +48,20 @@ export interface AIProvider {
 export { validateFiscalData };
 
 const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. Responde únicamente JSON válido.`;
+const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-20b';
+const GROQ_PRICING: Record<string, { input: number; output: number }> = {
+  'openai/gpt-oss-20b': { input: 0.075, output: 0.30 },
+  'openai/gpt-oss-120b': { input: 0.15, output: 0.60 }
+};
+const GROQ_LOCAL_TEXT_PROMPT = `Recibirás únicamente texto producido por OCR local de un comprobante fiscal dominicano. No recibirás imágenes. Ordena y corrige errores obvios de OCR solo cuando el propio texto permita confirmarlos. Devuelve exclusivamente JSON compatible con ReceiptExtraction, con supplier_name, supplier_rnc, ncf, ncf_type, date (YYYY-MM-DD), subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y line_items. No inventes datos: si un dato no aparece claramente, conserva el valor local, déjalo vacío o en cero. Respeta conceptos con valor cero y no confundas TOTAL NETO/SUBTOTAL con TOTAL. Usa el cuadre matemático solo para validar, no para crear importes no visibles.`;
+
+function normalizeGroqModel(model?: string): string {
+  const normalized = (model || '').trim();
+  if (!normalized || normalized === 'llama-3.1-8b-instant' || normalized === 'llama-3.3-70b-versatile' || normalized === 'llama-3.2-11b-vision-preview') {
+    return GROQ_DEFAULT_MODEL;
+  }
+  return normalized;
+}
 
 function imageAsDataUrl(image: ReceiptImage): string {
   return image.base64Data.startsWith('data:') || /^https?:\/\//i.test(image.base64Data)
@@ -663,9 +678,9 @@ export class GroqAIProvider implements AIProvider {
   private model: string;
   private orgId: string;
 
-  constructor(apiKey: string, model: string = 'llama-3.3-70b-versatile', orgId: string = 'org_allsender_corp') {
+  constructor(apiKey: string, model: string = GROQ_DEFAULT_MODEL, orgId: string = 'org_allsender_corp') {
     this.apiKey = apiKey;
-    this.model = model || 'llama-3.3-70b-versatile';
+    this.model = normalizeGroqModel(model);
     this.orgId = orgId;
   }
 
@@ -688,89 +703,72 @@ export class GroqAIProvider implements AIProvider {
   }
 
   async extractReceiptData(image: ReceiptImage): Promise<ReceiptExtraction> {
-    const startTime = Date.now();
-    if (!this.apiKey) throw new Error('API Key de Groq no configurada.');
-
-    try {
-      const prompt = `Analiza la imagen del comprobante fiscal dominicano (Factura con valor fiscal B01/B02/E31/etc). Extrae de forma precisa: supplier_name (nombre emisor), supplier_rnc (RNC o Cedula 9 u 11 digitos), ncf (comprobante fiscal 11 o 13 caracteres), ncf_type, subtotal, itbis_amount, total_amount, expense_date (YYYY-MM-DD), payment_method, classification, line_items. Responde UNICAMENTE en formato JSON valido que coincida con ReceiptExtraction.`;
-      
-      const imageUrl = image.base64Data.startsWith('data:')
-        ? image.base64Data
-        : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
-
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify({
-          model: this.model || 'llama-3.2-11b-vision-preview',
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: prompt },
-                { type: 'image_url', image_url: { url: imageUrl } }
-              ]
-            }
-          ],
-          response_format: { type: 'json_object' }
-        })
-      });
-
-      if (!res.ok) {
-        throw new Error(`Groq API respondió con HTTP ${res.status}`);
-      }
-
-      const json = await res.json();
-      const text = json.choices?.[0]?.message?.content || '{}';
-      const parsed = JSON.parse(text) as ReceiptExtraction;
-
-      await prismaRepo.logAIUsage({
-        organization_id: this.orgId,
-        provider_type: 'GROQ',
-        model: this.model,
-        action: 'EXTRACT_RECEIPT',
-        tokens_prompt: json.usage?.prompt_tokens || 800,
-        tokens_completion: json.usage?.completion_tokens || 200,
-        duration_ms: Date.now() - startTime,
-        status: 'SUCCESS'
-      });
-
-      return parsed;
-    } catch (error: any) {
-      await prismaRepo.logAIUsage({
-        organization_id: this.orgId,
-        provider_type: 'GROQ',
-        model: this.model,
-        action: 'EXTRACT_RECEIPT',
-        tokens_prompt: 0,
-        tokens_completion: 0,
-        duration_ms: Date.now() - startTime,
-        status: 'ERROR'
-      });
-      throw error;
-    }
+    const localExtraction = await extractWithLocalOCR(image);
+    return this.extractReceiptTextData(localExtraction.raw_text, localExtraction);
   }
 
   async extractReceiptSessionData(images: ReceiptImage[]): Promise<ReceiptExtraction> {
+    if (!this.apiKey) throw new Error('API Key de Groq no configurada.');
+    const localSegments: ReceiptExtraction[] = [];
+    for (const image of images) {
+      localSegments.push(await extractWithLocalOCR(image));
+    }
+    const rawText = localSegments.map((segment, index) => `[SEGMENTO ${index + 1}]\n${segment.raw_text}`).join('\n');
+    return this.extractReceiptTextData(rawText, localSegments[0]);
+  }
+
+  async extractReceiptTextData(rawText: string, localExtraction?: ReceiptExtraction): Promise<ReceiptExtraction> {
     const startTime = Date.now();
     if (!this.apiKey) throw new Error('API Key de Groq no configurada.');
+    if (!rawText.trim()) throw new Error('Groq requiere texto producido por OCR local; no se enviará la imagen.');
+
     try {
-      const result = await extractOpenAICompatibleSession({ endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: this.apiKey, model: this.model, images });
-      await prismaRepo.logAIUsage({
-        organization_id: this.orgId,
-        provider_type: 'GROQ',
-        model: this.model,
-        action: 'EXTRACT_RECEIPT',
-        tokens_prompt: result.usage.prompt_tokens || 800 * images.length,
-        tokens_completion: result.usage.completion_tokens || 400,
-        duration_ms: Date.now() - startTime,
-        status: 'SUCCESS'
+      const localContext = localExtraction ? JSON.stringify({
+        supplier_name: localExtraction.supplier_name,
+        supplier_rnc: localExtraction.supplier_rnc,
+        ncf: localExtraction.ncf,
+        date: localExtraction.date,
+        subtotal: localExtraction.subtotal,
+        itbis_amount: localExtraction.itbis_amount,
+        total_amount: localExtraction.total_amount,
+        line_items: localExtraction.line_items
+      }) : '{}';
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'user', content: `${GROQ_LOCAL_TEXT_PROMPT}\n\nESTRUCTURA LOCAL (solo referencia):\n${localContext}\n\nTEXTO OCR LOCAL:\n${rawText}` }],
+          response_format: { type: 'json_object' },
+          max_tokens: 900
+        })
       });
-      return result.extraction;
-    } catch (error) {
+      if (!res.ok) throw new Error(`Groq API respondió con HTTP ${res.status}`);
+
+      const json = await res.json();
+      const parsed = JSON.parse(json.choices?.[0]?.message?.content || '{}') as Partial<ReceiptExtraction>;
+      const base = localExtraction || parseLocalOCRText(rawText);
+      const extraction: ReceiptExtraction = {
+        ...base,
+        ...parsed,
+        supplier_name: parsed.supplier_name || base.supplier_name,
+        supplier_rnc: parsed.supplier_rnc || base.supplier_rnc,
+        ncf: parsed.ncf || base.ncf,
+        date: parsed.date || base.date,
+        subtotal: Number(parsed.subtotal || base.subtotal || 0),
+        itbis_amount: Number(parsed.itbis_amount || base.itbis_amount || 0),
+        legal_tip_amount: Number(parsed.legal_tip_amount || base.legal_tip_amount || 0),
+        other_taxes: Number(parsed.other_taxes || base.other_taxes || 0),
+        total_amount: Number(parsed.total_amount || base.total_amount || 0),
+        confidence_score: Number(parsed.confidence_score || base.confidence_score || 0),
+        line_items: Array.isArray(parsed.line_items) && parsed.line_items.length > 0 ? parsed.line_items : base.line_items,
+        raw_text: rawText,
+        observations: [...new Set([...(base.observations || []), ...(parsed.observations || []), 'Groq procesó únicamente el texto OCR local; no recibió la imagen.'])]
+      };
+
+      await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GROQ', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: json.usage?.prompt_tokens || 0, tokens_completion: json.usage?.completion_tokens || 0, duration_ms: Date.now() - startTime, status: 'SUCCESS' });
+      return extraction;
+    } catch (error: any) {
       await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GROQ', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: 0, tokens_completion: 0, duration_ms: Date.now() - startTime, status: 'ERROR' });
       throw error;
     }
@@ -792,10 +790,14 @@ export class GroqAIProvider implements AIProvider {
 
   async getUsage(): Promise<AIUsage> {
     const logs = (await prismaRepo.getAIUsageLogs(this.orgId)).filter(l => l.provider_type === 'GROQ');
+    const estimated_cost_usd = logs.reduce((total, log) => {
+      const pricing = GROQ_PRICING[normalizeGroqModel(log.model)] || GROQ_PRICING[GROQ_DEFAULT_MODEL];
+      return total + (log.tokens_prompt / 1000000) * pricing.input + (log.tokens_completion / 1000000) * pricing.output;
+    }, 0);
     return {
       total_requests: logs.length,
       total_tokens: logs.reduce((a, b) => a + b.tokens_prompt + b.tokens_completion, 0),
-      estimated_cost_usd: 0.05,
+      estimated_cost_usd: Number(estimated_cost_usd.toFixed(6)),
       average_latency_ms: logs.length > 0 ? Math.round(logs.reduce((a, b) => a + b.duration_ms, 0) / logs.length) : 0
     };
   }
@@ -1079,7 +1081,12 @@ export async function getAIProviderInstance(orgId: string, preferredType?: AIPro
     return new CodeMorfAIProvider('', 'codemorf-vision-v1', orgId);
   }
 
-  const rawKey = await prismaRepo.getDecryptedAIProviderKey(orgId, selected.id) || (selected.provider_type === 'GEMINI' ? process.env.GEMINI_API_KEY : '') || '';
+  const providerEnvironmentKey = selected.provider_type === 'GEMINI'
+    ? process.env.GEMINI_API_KEY
+    : selected.provider_type === 'GROQ'
+      ? process.env.GROQ_API_KEY
+      : '';
+  const rawKey = await prismaRepo.getDecryptedAIProviderKey(orgId, selected.id) || providerEnvironmentKey || '';
 
   switch (selected.provider_type) {
     case 'CODEMORF':
@@ -1096,7 +1103,8 @@ export async function getAIProviderInstance(orgId: string, preferredType?: AIPro
 
 export async function extractReceiptSessionWithAI(
   orgId: string,
-  images: ReceiptImage[]
+  images: ReceiptImage[],
+  localExtraction?: ReceiptExtraction
 ): Promise<{ extraction: ReceiptExtraction; providerUsed: AIProviderType; modelUsed: string } | null> {
   const configs = (await prismaRepo.getAIProviderConfigs(orgId))
     .filter(config => config.is_active && config.has_key)
@@ -1104,10 +1112,14 @@ export async function extractReceiptSessionWithAI(
 
   for (const config of configs) {
     const provider = await getAIProviderInstance(orgId, config.provider_type);
-    if (!provider.extractReceiptSessionData) continue;
     try {
-      const extraction = await provider.extractReceiptSessionData(images);
-      return { extraction, providerUsed: config.provider_type, modelUsed: config.selected_model };
+      const extraction = config.provider_type === 'GROQ' && provider.extractReceiptTextData
+        ? await provider.extractReceiptTextData(localExtraction?.raw_text || '', localExtraction)
+        : provider.extractReceiptSessionData
+          ? await provider.extractReceiptSessionData(images)
+          : null;
+      if (!extraction) continue;
+      return { extraction, providerUsed: config.provider_type, modelUsed: config.provider_type === 'GROQ' ? normalizeGroqModel(config.selected_model) : config.selected_model };
     } catch (error: any) {
       console.warn(`[AI Session Chain] Engine ${config.provider_type} failed: ${error.message}. Trying next provider...`);
     }
@@ -1120,6 +1132,16 @@ export async function extractReceiptSessionWithAI(
       return { extraction, providerUsed: 'GEMINI', modelUsed: 'gemini-2.5-flash' };
     } catch (error: any) {
       console.warn(`[AI Session Chain] Environment Gemini failed: ${error.message}. Keeping local OCR result.`);
+    }
+  }
+
+  if (configs.length === 0 && process.env.GROQ_API_KEY && localExtraction?.raw_text) {
+    try {
+      const provider = new GroqAIProvider(process.env.GROQ_API_KEY, GROQ_DEFAULT_MODEL, orgId);
+      const extraction = await provider.extractReceiptTextData(localExtraction.raw_text, localExtraction);
+      return { extraction, providerUsed: 'GROQ', modelUsed: GROQ_DEFAULT_MODEL };
+    } catch (error: any) {
+      console.warn(`[AI Session Chain] Environment Groq failed: ${error.message}. Keeping local OCR result.`);
     }
   }
 
@@ -1165,6 +1187,16 @@ export async function extractWithFallback(
         console.warn(`[AI Chain] Environment Gemini failed: ${error.message}. Using local OCR result...`);
       }
     }
+    const environmentGroqKey = process.env.GROQ_API_KEY || '';
+    if (environmentGroqKey && localExtraction) {
+      try {
+        const defaultGroq = new GroqAIProvider(environmentGroqKey, GROQ_DEFAULT_MODEL, orgId);
+        const extraction = await defaultGroq.extractReceiptTextData(localExtraction.raw_text, localExtraction);
+        return { extraction, providerUsed: 'GROQ', modelUsed: GROQ_DEFAULT_MODEL };
+      } catch (error: any) {
+        console.warn(`[AI Chain] Environment Groq failed: ${error.message}. Using local OCR result...`);
+      }
+    }
     if (localExtraction) return { extraction: localExtraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
     if (localFailure) throw localFailure;
     const extraction = await extractWithLocalOCR(image, segmentIndex);
@@ -1176,9 +1208,11 @@ export async function extractWithFallback(
   for (const cfg of sorted) {
     try {
       const instance = await getAIProviderInstance(orgId, cfg.provider_type);
-      const extraction = await instance.extractReceiptData(image);
+      const extraction = cfg.provider_type === 'GROQ' && instance.extractReceiptTextData
+        ? await instance.extractReceiptTextData(localExtraction?.raw_text || '', localExtraction || undefined)
+        : await instance.extractReceiptData(image);
       extraction.line_items = (extraction.line_items || []).map(item => ({ ...item, segment_index: segmentIndex }));
-      return { extraction, providerUsed: cfg.provider_type, modelUsed: cfg.selected_model };
+      return { extraction, providerUsed: cfg.provider_type, modelUsed: cfg.provider_type === 'GROQ' ? normalizeGroqModel(cfg.selected_model) : cfg.selected_model };
     } catch (error: any) {
       console.warn(`[AI Chain] Engine ${cfg.provider_type} failed: ${error.message}. Trying next fallback...`);
       lastError = error;

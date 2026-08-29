@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { validateFiscalData, GeminiAIProvider, parseLocalOCRText } from '../server/ai-providers.ts';
+import { describe, it, expect, vi } from 'vitest';
+import { validateFiscalData, GeminiAIProvider, GroqAIProvider, parseLocalOCRText } from '../server/ai-providers.ts';
+import { prismaRepo } from '../server/database/prisma.repository.ts';
 
 describe('AI & Fiscal Validation Rules', () => {
   it('validates Dominican RNC formats correctly', () => {
@@ -89,5 +90,34 @@ describe('AI & Fiscal Validation Rules', () => {
     expect(result.subtotal).toBe(254.2);
     expect(result.itbis_amount).toBe(45.8);
     expect(result.total_amount).toBe(300);
+  });
+
+  it('sends only local OCR text to Groq and uses the low-cost production model', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ total_amount: 300, confidence_score: 80 }) } }],
+        usage: { prompt_tokens: 120, completion_tokens: 40 }
+      })
+    });
+    const logUsageSpy = vi.spyOn(prismaRepo, 'logAIUsage').mockResolvedValue({} as any);
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const local = parseLocalOCRText('TOTAL: 300.00', 60);
+      const result = await new GroqAIProvider('test-key').extractReceiptTextData('TOTAL: 300.00', local);
+      const request = fetchMock.mock.calls[0][1] as RequestInit;
+      const body = JSON.parse(String(request.body));
+
+      expect(body.model).toBe('openai/gpt-oss-20b');
+      expect(body.messages[0].content).toContain('TEXTO OCR LOCAL');
+      expect(JSON.stringify(body)).not.toContain('image_url');
+      expect(result.total_amount).toBe(300);
+      expect(logUsageSpy).toHaveBeenCalledOnce();
+    } finally {
+      logUsageSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });
