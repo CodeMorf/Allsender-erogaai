@@ -473,7 +473,7 @@ model AIProviderConfig {
   is_secondary_fallback Boolean   @default(false)
   total_requests        Int       @default(0)
   total_tokens          Int       @default(0)
-  status                String    @default("ONLINE")
+  status                String    @default("UNTESTED")
   last_test_message     String?
   last_used_at          DateTime?
   created_at            DateTime  @default(now())

@@ -131,6 +131,16 @@ export const AIConfigurationView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {aiProviders.map(prov => {
           const isTesting = testingId === prov.id;
+          const providerStatusLabel = !prov.has_key
+            ? 'Sin configurar'
+            : prov.status === 'ONLINE'
+              ? 'Conexión comprobada'
+              : prov.status === 'OFFLINE'
+                ? 'No disponible'
+                : 'Sin verificar';
+          const providerStatusClass = !prov.has_key || prov.status !== 'ONLINE'
+            ? 'text-slate-500'
+            : 'text-emerald-600';
           return (
             <div
               key={prov.id}
@@ -218,8 +228,8 @@ export const AIConfigurationView: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 uppercase font-semibold block">Estado</span>
-                    <span className={`font-bold ${prov.status === 'ONLINE' ? 'text-emerald-600' : 'text-slate-500'}`}>
-                      {prov.status}
+                    <span className={`font-bold ${providerStatusClass}`}>
+                      {providerStatusLabel}
                     </span>
                   </div>
                 </div>

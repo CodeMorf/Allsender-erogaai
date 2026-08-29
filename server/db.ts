@@ -291,8 +291,7 @@ const initialAIProviders: AIProviderConfig[] = [
     is_secondary_fallback: false,
     total_requests: 0,
     total_tokens: 0,
-    status: 'ONLINE',
-    last_test_message: 'Conexión verificada con Google Gemini Vision API',
+    status: 'UNTESTED',
     created_at: new Date().toISOString()
   }
 ];
@@ -2289,7 +2288,7 @@ export class ErogaAIDatabase {
       total_requests: data.total_requests || 0,
       total_tokens: data.total_tokens || 0,
       last_used_at: data.last_used_at,
-      status: data.status || 'ONLINE',
+      status: data.status || 'UNTESTED',
       last_test_message: data.last_test_message,
       created_at: now
     };

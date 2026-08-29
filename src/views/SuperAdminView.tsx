@@ -167,9 +167,9 @@ export const SuperAdminView: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{p.name}</span>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      p.status === 'ONLINE' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                      p.has_key && p.status === 'ONLINE' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
                     }`}>
-                      {p.status}
+                      {!p.has_key ? 'Sin configurar' : p.status === 'ONLINE' ? 'Conexión comprobada' : p.status === 'OFFLINE' ? 'No disponible' : 'Sin verificar'}
                     </span>
                   </div>
                   <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
