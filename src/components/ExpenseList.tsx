@@ -296,7 +296,7 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
                 <th className="py-3 px-3 text-right">ITBIS (18%)</th>
                 <th className="py-3 px-4 text-right">Total RD$</th>
                 <th className="py-3 px-3 text-center">Estado</th>
-                <th className="py-3 px-3 text-center">IA OCR</th>
+                <th className="py-3 px-3 text-center">Lectura</th>
                 <th className="py-3 px-4 text-right">Acciones</th>
               </tr>
             </thead>

@@ -157,7 +157,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
           <div className="grid max-w-lg grid-cols-3 gap-3">
             {[
               ['DGII 606', 'Reportes listos'],
-              ['OCR + IA', 'Menos digitación'],
+              ['Captura automática', 'Menos digitación'],
               ['Multiempresa', 'Datos aislados']
             ].map(([title, description]) => (
               <div key={title} className="rounded-2xl border border-white/80 bg-white/65 p-3 shadow-sm backdrop-blur">

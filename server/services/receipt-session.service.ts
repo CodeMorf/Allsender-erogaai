@@ -90,7 +90,7 @@ export class ReceiptSessionService {
           });
         } catch (error: any) {
           hasLowConfidenceSegment = true;
-          await prismaRepo.updateReceiptSegmentOcr(orgId, sessionId, segment.id, { status: 'FAILED', error: error.message || 'OCR local falló.' });
+          await prismaRepo.updateReceiptSegmentOcr(orgId, sessionId, segment.id, { status: 'FAILED', error: error.message || 'No se pudo leer el comprobante.' });
         }
       }
 

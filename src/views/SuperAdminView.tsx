@@ -94,7 +94,7 @@ export const SuperAdminView: React.FC = () => {
             <p className="text-xl font-bold text-white">{totalProcessedInvoices} <span className="text-xs font-normal text-indigo-300">docs</span></p>
           </div>
           <div className="p-3 rounded-xl bg-slate-950/50 border border-indigo-900/40 space-y-1">
-            <span className="text-indigo-300 text-[11px]">Peticiones IA OCR</span>
+            <span className="text-indigo-300 text-[11px]">Procesamientos automáticos</span>
             <p className="text-xl font-bold text-emerald-400">{totalAiRequests} <span className="text-xs font-normal text-indigo-300">calls</span></p>
           </div>
           <div className="p-3 rounded-xl bg-slate-950/50 border border-indigo-900/40 space-y-1">

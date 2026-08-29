@@ -36,6 +36,17 @@ interface CapturedSegment {
   status: string;
 }
 
+function toPlainObservation(observation: string): string {
+  return observation
+    .replace(/Extraído con OCR local gratuito \(Tesseract\.js\)\.?/gi, 'Comprobante leído localmente; revise los campos antes de aprobar.')
+    .replace(/Groq procesó únicamente el texto OCR local; no recibió la imagen\.?/gi, 'Se revisó automáticamente la información leída; revise los campos antes de aprobar.')
+    .replace(/Se combinó OCR de cuerpo\/encabezado por la longitud del comprobante; revise los campos antes de aprobar\.?/gi, 'Se combinaron las lecturas del encabezado y el cuerpo; revise los campos antes de aprobar.')
+    .replace(/OCR local falló\.?/gi, 'No se pudo leer el comprobante.')
+    .replace(/\s*\(Tesseract\.js\)/gi, '')
+    .replace(/\bTesseract(?:\.js)?\b/gi, 'lectura automática')
+    .replace(/\bOCR\b/gi, 'lectura automática');
+}
+
 function fiscalFingerprint(input: {
   supplierName: string;
   supplierRnc: string;
@@ -363,7 +374,7 @@ export const ExpenseScannerModal: React.FC = () => {
   const processReceiptSession = async () => {
     if (!receiptSessionId || segments.length === 0) return;
     setStep('PROCESSING');
-    setProcessingStatus('Leyendo cada tramo con OCR local...');
+    setProcessingStatus('Leyendo cada tramo del comprobante...');
 
     try {
       const providerTimer = window.setTimeout(() => setProcessingStatus('Consolidando líneas, solapes y totales fiscales...'), 700);
@@ -442,7 +453,7 @@ export const ExpenseScannerModal: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Error processing OCR:', err);
-      showToast('error', 'Error en OCR', err.message || 'No se pudo completar el análisis del documento.');
+      showToast('error', 'No se pudo leer el comprobante', err.message || 'No se pudo completar el análisis del documento.');
       setStep('SEGMENT_REVIEW');
     }
   };
@@ -582,7 +593,7 @@ export const ExpenseScannerModal: React.FC = () => {
                 {step === 'REVIEW_FORM' ? 'Verificación y Corrección de Erogación' : 'Capturar o Escanear Comprobante Fiscal'}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                OCR local primero; IA solo cuando haga falta
+                Lectura automática; ayuda adicional solo cuando haga falta
               </p>
             </div>
           </div>
@@ -767,7 +778,7 @@ export const ExpenseScannerModal: React.FC = () => {
                           <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">Tramo {index + 1}</span>
                           <span className="block truncate text-[10px] text-slate-500">{segment.file_name}</span>
                           <span className={`text-[10px] font-semibold ${['FAILED', 'LOW_CONFIDENCE'].includes(segment.status) ? 'text-amber-600' : 'text-emerald-600'}`}>
-                            {segment.status === 'FAILED' ? '⚠ Falló' : segment.status === 'LOW_CONFIDENCE' ? '⚠ Foto borrosa o ambigua' : segment.status === 'OCR_COMPLETED' ? '✓ OCR completo' : '✓ Guardado'}
+                            {segment.status === 'FAILED' ? '⚠ Falló' : segment.status === 'LOW_CONFIDENCE' ? '⚠ Foto borrosa o ambigua' : segment.status === 'OCR_COMPLETED' ? '✓ Lectura completa' : '✓ Guardado'}
                           </span>
                         </button>
                         <div className="grid grid-cols-2 gap-1">
@@ -815,7 +826,7 @@ export const ExpenseScannerModal: React.FC = () => {
                   {processingStatus}
                 </p>
                 <p className="text-[11px] text-slate-400">
-                  OCR local por tramo y verificación inteligente cuando sea necesaria
+                  Lectura por tramo y verificación automática cuando sea necesaria
                 </p>
               </div>
             </div>
@@ -833,7 +844,7 @@ export const ExpenseScannerModal: React.FC = () => {
                       Comprobante completo ({segments.length} tramos)
                     </span>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300">
-                      IA Score: {confidenceScore}%
+                      Nivel de lectura: {confidenceScore}%
                     </span>
                   </div>
                   {segments[activePreviewIndex] ? (
@@ -900,11 +911,11 @@ export const ExpenseScannerModal: React.FC = () => {
                   <div className="p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 text-xs text-blue-900 dark:text-blue-300 space-y-1">
                     <div className="flex items-center gap-1.5 font-bold text-blue-700 dark:text-blue-400">
                       <Sparkles className="w-3.5 h-3.5" />
-                      <span>Validación Automática IA:</span>
+                      <span>Verificación automática:</span>
                     </div>
                     <ul className="list-disc list-inside space-y-0.5 text-[11px]">
                       {aiObservations.map((obs, idx) => (
-                        <li key={idx}>{obs}</li>
+                        <li key={idx}>{toPlainObservation(obs)}</li>
                       ))}
                     </ul>
                   </div>

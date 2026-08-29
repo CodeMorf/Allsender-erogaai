@@ -239,7 +239,7 @@ const normalizeReceiptDate = (rawValue?: string): string => {
 const isSupplierNameCandidate = (line: string): boolean => {
   if (line.length < 3 || line.length > 90) return false;
   if ((line.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length < 3) return false;
-  return !/(R\.?\s*N\.?\s*C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TEL\b|TEL[EÉ]FONO|FECHA|EMISI[ÓO]N|SUBTOTAL|ITBIS|TOTAL|CAMBIO|CAJERO|CALLE|AV(?:ENIDA)?\.?|DIRECCI[ÓO]N|SECTOR|CIUDAD|SANTO\s+DOMINGO|MESA|SERV\b|RAZ[ÓO]N\s+SOCIAL|CLIENTE|DIRECCION|HORA|FIRMA|CODIGO\s+DE\s+SEGURIDAD)/i.test(line);
+  return !/(R\.?\s*N\.?\s*C\.?|C[EÉ]DULA|E?-?NCF|FACTURA|RECIBO|TEL\b|TEL[EÉ]FONO|FECHA|EMISI[ÓO]N|SUBTOTAL|ITBIS|TIBIS|IBIS|IVA|TAX|TOTAL|CAMBIO|CAJERO|CALLE|AV(?:ENIDA)?\.?|DIRECCI[ÓO]N|SECTOR|CIUDAD|SANTO\s+DOMINGO|MESA|SERV\b|RAZ[ÓO]N\s+SOCIAL|CLIENTE|DIRECCION|HORA|FIRMA|CODIGO\s+DE\s+SEGURIDAD)/i.test(line);
 };
 
 const receiptQuality = (extraction: ReceiptExtraction): number => (
@@ -293,7 +293,7 @@ function mergeLocalExtractions(base: ReceiptExtraction, supplement: ReceiptExtra
     observations: [...new Set([
       ...(base.observations || []),
       ...(supplement.observations || []),
-      'Se combinó OCR de cuerpo/encabezado por la longitud del comprobante; revise los campos antes de aprobar.'
+      'Se combinaron las lecturas del encabezado y el cuerpo; revise los campos antes de aprobar.'
     ])]
   };
 }
@@ -343,11 +343,11 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
     || '';
 
   const subtotal = findLabeledAmount(lines, /\b(?:SUB\s*TOTAL|TOTAL\s+NETO)\b/i);
-  const itbisAmount = findLabeledAmount(lines, /\bITBIS\b/i)
-    || findLabeledAmount(lines, /^(?:\s*(?:IBIS|IVA|TAX)\b|\s*US\s+(?!\$))/i);
+  const itbisAmount = findLabeledAmount(lines, /\b(?:ITBIS|TIBIS|IBIS|I8IS|IVA|TAX)\b/i)
+    || findLabeledAmount(lines, /\bUS\s+(?!\$)/i);
   const legalTipAmount = findLabeledAmount(lines, /\b(?:PROPINA|LEY\s*54-32)\b/i);
   const totalAmount = findLabeledAmount(lines, /\b(?:TOTAL\s+(?:A\s+PAGAR|GENERAL)|MONTO\s+TOTAL)\b/i)
-    || findLabeledAmount(lines.filter(line => !/\b(?:SUB\s*TOTAL|TOTAL\s+NETO|TOTAL\s+DE\s+ART[IÍ]CULOS?)\b/i.test(line)), /^\s*TOTAL\b(?!\s+(?:NETO|DE\s+ART[IÍ]CULOS?))/i);
+    || findLabeledAmount(lines.filter(line => !/\b(?:SUB\s*TOTAL|TOTAL\s+NETO|TOTAL\s+DE\s+ART[IÍ]CULOS?)\b/i.test(line)), /\bTOTAL\b(?!\s+(?:NETO|DE\s+ART[IÍ]CULOS?))/i);
   const resolvedSubtotal = subtotal || Math.max(0, totalAmount - itbisAmount - legalTipAmount);
 
   const normalizedNcf = (ncfMatch?.[1] || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
@@ -395,7 +395,7 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
     line_items: lineItems,
     raw_text: rawText,
     observations: [
-      'Extraído con OCR local gratuito (Tesseract.js).',
+      'Comprobante leído localmente; revise los campos antes de aprobar.',
       'Revise RNC, NCF y montos antes de aprobar el comprobante.'
     ]
   };
@@ -765,7 +765,7 @@ export class GroqAIProvider implements AIProvider {
         confidence_score: Number(parsed.confidence_score || base.confidence_score || 0),
         line_items: Array.isArray(parsed.line_items) && parsed.line_items.length > 0 ? parsed.line_items : base.line_items,
         raw_text: rawText,
-        observations: [...new Set([...(base.observations || []), ...(parsed.observations || []), 'Groq procesó únicamente el texto OCR local; no recibió la imagen.'])]
+        observations: [...new Set([...(base.observations || []), ...(parsed.observations || []), 'Se revisó automáticamente la información leída; revise los campos antes de aprobar.'])]
       };
 
       await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GROQ', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: json.usage?.prompt_tokens || 0, tokens_completion: json.usage?.completion_tokens || 0, duration_ms: Date.now() - startTime, status: 'SUCCESS' });

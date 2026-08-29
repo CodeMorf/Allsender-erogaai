@@ -139,7 +139,7 @@ export const UsersView: React.FC<UsersViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
               <tr>
-                <td className="py-2.5 px-4 font-semibold text-slate-800 dark:text-slate-200">Tomar Fotos & OCR de Tickets</td>
+              <td className="py-2.5 px-4 font-semibold text-slate-800 dark:text-slate-200">Tomar fotos de comprobantes</td>
                 <td className="py-2.5 px-3 text-center text-emerald-600 font-bold"><Check className="w-4 h-4 mx-auto" /></td>
                 <td className="py-2.5 px-3 text-center text-emerald-600 font-bold"><Check className="w-4 h-4 mx-auto" /></td>
                 <td className="py-2.5 px-3 text-center text-emerald-600 font-bold"><Check className="w-4 h-4 mx-auto" /></td>

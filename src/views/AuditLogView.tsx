@@ -88,7 +88,7 @@ export const AuditLogView: React.FC = () => {
             Pista de Auditoría Fiscal & Trazabilidad
           </h1>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-            Registro inmutable de todas las acciones operativas: escaneos OCR, ediciones de campos, autorizaciones, rechazos y exportaciones 606.
+            Registro inmutable de todas las acciones operativas: lecturas de comprobantes, ediciones de campos, autorizaciones, rechazos y exportaciones 606.
           </p>
         </div>
       </div>

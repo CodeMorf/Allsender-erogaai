@@ -199,11 +199,11 @@ export const ExpenseDetailModal: React.FC = () => {
             <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs space-y-2">
               <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                Auditoría de Inteligencia Artificial
+                Verificación automática
               </span>
               <div className="space-y-1 text-slate-600 dark:text-slate-300 text-[11px]">
-                <p>• Motor IA: <strong className="text-slate-900 dark:text-slate-100">{selectedExpense.ai_provider_used}</strong> ({selectedExpense.ai_model_used})</p>
-                <p>• Confianza OCR: <strong className="text-emerald-600">{selectedExpense.ai_confidence_score}%</strong></p>
+                <p>• Procesado automáticamente: <strong className="text-slate-900 dark:text-slate-100">Sí</strong></p>
+                <p>• Nivel de lectura: <strong className="text-emerald-600">{selectedExpense.ai_confidence_score}%</strong></p>
                 <p>• Validador DGII: {ncfVal.message}</p>
                 <p>• Registrado por: {selectedExpense.created_by_name}</p>
               </div>

@@ -59,7 +59,7 @@ describe('AI & Fiscal Validation Rules', () => {
     expect(result.itbis_amount).toBe(180);
     expect(result.total_amount).toBe(1180);
     expect(result.confidence_score).toBe(78);
-    expect(result.observations?.[0]).toContain('Tesseract.js');
+    expect(result.observations?.[0]).toContain('Comprobante leído localmente');
   });
 
   it('does not invent today as the receipt date when OCR did not find one', () => {
@@ -90,6 +90,20 @@ describe('AI & Fiscal Validation Rules', () => {
     expect(result.subtotal).toBe(254.2);
     expect(result.itbis_amount).toBe(45.8);
     expect(result.total_amount).toBe(300);
+  });
+
+  it('distinguishes Total Neto, tax labels and a prefixed grand total', () => {
+    const result = parseLocalOCRText(`
+      Pollos Victorina
+      RNC: 131163041
+      Total Neto: 1,743.21 PERE
+      Ss IBIS 208.18 FDA
+      UN TOTAL : 2,020.99 MI
+    `, 70);
+
+    expect(result.subtotal).toBe(1743.21);
+    expect(result.itbis_amount).toBe(208.18);
+    expect(result.total_amount).toBe(2020.99);
   });
 
   it('sends only local OCR text to Groq and uses the low-cost production model', async () => {

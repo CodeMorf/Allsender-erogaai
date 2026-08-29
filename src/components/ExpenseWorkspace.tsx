@@ -259,7 +259,7 @@ export const ExpenseWorkspace: React.FC<ExpenseWorkspaceProps> = ({
               <div className="mt-3 p-2.5 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-[11px]">
                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-purple-500" />
-                  Texto Detectado por OCR:
+                  Texto detectado:
                 </div>
                 <pre className="font-mono text-slate-600 dark:text-slate-300 whitespace-pre-wrap max-h-24 overflow-y-auto leading-relaxed">
                   {expense.ocr_raw_text}
