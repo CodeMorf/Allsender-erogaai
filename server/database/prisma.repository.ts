@@ -21,11 +21,14 @@ import {
   Project,
   Vehicle,
   ReceiptRecord,
+  ReceiptSessionRecord,
+  ReceiptSegmentRecord,
   AIProviderConfig,
   AIUsageLog,
   ERPConfig,
   WebhookSubscription
 } from '../../src/types.ts';
+import type { DgiiTaxpayerData } from '../services/dgii-provider.service.ts';
 import { decryptApiKey, encryptApiKey, generateRawApiKey, hashApiKey, maskApiKey } from '../encryption.ts';
 import { PERMISSIONS, defaultRolesForOrg } from '../rbac.ts';
 
@@ -210,6 +213,12 @@ export class PrismaRepository {
       itbis_rate: item.itbis_rate,
       total: item.total,
       sku: item.sku || undefined,
+      discount: item.discount ?? undefined,
+      taxable_amount: item.taxable_amount ?? undefined,
+      itbis_amount: item.itbis_amount ?? undefined,
+      segment_index: item.segment_index ?? undefined,
+      confidence: item.confidence ?? undefined,
+      raw_text: item.raw_text || undefined,
       cost_center_id: item.cost_center_id || undefined,
       project_id: item.project_id || undefined
     };
@@ -231,6 +240,7 @@ export class PrismaRepository {
       supplier_name: e.supplier_name,
       supplier_rnc: e.supplier_rnc,
       supplier_id: e.supplier_id || undefined,
+      receipt_session_id: e.receipt_session_id || undefined,
       ncf: e.ncf,
       ncf_type: e.ncf_type as any,
       document_type: e.document_type as any,
@@ -363,14 +373,25 @@ export class PrismaRepository {
       id: row.id,
       organization_id: row.organization_id,
       rnc: row.rnc,
+      rnc_normalized: row.rnc_normalized || undefined,
       name: row.name,
       trade_name: row.trade_name || undefined,
       phone: row.phone || undefined,
       email: row.email || undefined,
       category_default: row.category_default || undefined,
       status_dgii: row.status_dgii as any,
+      categoria_dgii: row.categoria_dgii || undefined,
+      regimen_de_pagos: row.regimen_de_pagos || undefined,
+      actividad_economica: row.actividad_economica || undefined,
+      administracion_local: row.administracion_local || undefined,
+      facturador_electronico: row.facturador_electronico || undefined,
+      licencias_vhm: row.licencias_vhm || undefined,
+      dgii_source: row.dgii_source || undefined,
+      dgii_last_verified_at: iso(row.dgii_last_verified_at),
+      dgii_metadata: parseJson(row.dgii_metadata_json, undefined),
       total_invoiced: row.total_invoiced,
-      created_at: new Date(row.created_at).toISOString()
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: iso(row.updated_at)
     };
   }
 
@@ -395,6 +416,47 @@ export class PrismaRepository {
       fiscal_validation: parseJson(row.fiscal_validation_json, undefined),
       meta: parseJson(row.meta_json, undefined),
       error: row.error || undefined,
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at || row.created_at).toISOString()
+    };
+  }
+
+  private toReceiptSegment(row: any, includeImage = false): ReceiptSegmentRecord {
+    return {
+      id: row.id,
+      organization_id: row.organization_id,
+      receipt_session_id: row.receipt_session_id,
+      segment_index: row.segment_index,
+      status: row.status as any,
+      image_url: row.image_url || undefined,
+      image_base64: includeImage ? row.image_base64 || undefined : undefined,
+      file_name: row.file_name || undefined,
+      mime_type: row.mime_type || 'image/jpeg',
+      ocr_text: row.ocr_text || undefined,
+      extraction: parseJson(row.extraction_json, undefined),
+      confidence: row.confidence ?? undefined,
+      error: row.error || undefined,
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at || row.created_at).toISOString()
+    };
+  }
+
+  private toReceiptSession(row: any, includeImages = false): ReceiptSessionRecord {
+    return {
+      id: row.id,
+      organization_id: row.organization_id,
+      status: row.status as any,
+      supplier_id: row.supplier_id || undefined,
+      expense_id: row.expense?.id || undefined,
+      extraction: parseJson(row.extraction_json, undefined),
+      fiscal_validation: parseJson(row.fiscal_validation_json, undefined),
+      reconciliation: parseJson(row.reconciliation_json, undefined),
+      supplier_resolution: parseJson(row.supplier_resolution_json, undefined),
+      meta: parseJson(row.meta_json, undefined),
+      segments_count: row.segments_count,
+      duplicates_removed: row.duplicates_removed,
+      error: row.error || undefined,
+      segments: (row.segments || []).map((segment: any) => this.toReceiptSegment(segment, includeImages)),
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at || row.created_at).toISOString()
     };
@@ -853,12 +915,100 @@ export class PrismaRepository {
     return rows.map(row => this.toSupplier(row));
   }
 
+  async findSupplierByNormalizedRnc(orgId: string, normalizedRnc: string): Promise<Supplier | null> {
+    const clean = (normalizedRnc || '').replace(/\D/g, '');
+    if (!clean) return null;
+    const row = await this.prisma.supplier.findUnique({
+      where: { organization_id_rnc_normalized: { organization_id: orgId, rnc_normalized: clean } }
+    });
+    return row ? this.toSupplier(row) : null;
+  }
+
   async saveSupplier(orgId: string, data: Partial<Supplier>): Promise<Supplier> {
-    const existing = data.id ? await this.prisma.supplier.findFirst({ where: { id: data.id, organization_id: orgId } }) : data.rnc ? await this.prisma.supplier.findFirst({ where: { organization_id: orgId, rnc: data.rnc } }) : null;
+    const normalizedRnc = (data.rnc_normalized || data.rnc || '').replace(/\D/g, '') || null;
+    const existing = data.id
+      ? await this.prisma.supplier.findFirst({ where: { id: data.id, organization_id: orgId } })
+      : normalizedRnc
+        ? await this.prisma.supplier.findUnique({ where: { organization_id_rnc_normalized: { organization_id: orgId, rnc_normalized: normalizedRnc } } })
+        : null;
     const saved = existing
-      ? await this.prisma.supplier.update({ where: { id: existing.id }, data: { rnc: data.rnc ?? existing.rnc, name: data.name ?? existing.name, trade_name: data.trade_name !== undefined ? data.trade_name : existing.trade_name, phone: data.phone !== undefined ? data.phone : existing.phone, email: data.email !== undefined ? data.email : existing.email, category_default: data.category_default !== undefined ? data.category_default : existing.category_default, status_dgii: data.status_dgii ?? existing.status_dgii, total_invoiced: data.total_invoiced ?? existing.total_invoiced } })
-      : await this.prisma.supplier.create({ data: { id: data.id || id('sup'), organization_id: orgId, rnc: data.rnc || '', name: data.name || 'Proveedor Nuevo', trade_name: data.trade_name || data.name, phone: data.phone, email: data.email, category_default: data.category_default, status_dgii: data.status_dgii || 'ACTIVO', total_invoiced: data.total_invoiced ?? 0 } });
+      ? await this.prisma.supplier.update({ where: { id: existing.id }, data: {
+          rnc: data.rnc ?? existing.rnc,
+          rnc_normalized: normalizedRnc ?? existing.rnc_normalized,
+          name: data.name ?? existing.name,
+          trade_name: data.trade_name !== undefined ? data.trade_name : existing.trade_name,
+          phone: data.phone !== undefined ? data.phone : existing.phone,
+          email: data.email !== undefined ? data.email : existing.email,
+          category_default: data.category_default !== undefined ? data.category_default : existing.category_default,
+          status_dgii: data.status_dgii ?? existing.status_dgii,
+          categoria_dgii: data.categoria_dgii !== undefined ? data.categoria_dgii : existing.categoria_dgii,
+          regimen_de_pagos: data.regimen_de_pagos !== undefined ? data.regimen_de_pagos : existing.regimen_de_pagos,
+          actividad_economica: data.actividad_economica !== undefined ? data.actividad_economica : existing.actividad_economica,
+          administracion_local: data.administracion_local !== undefined ? data.administracion_local : existing.administracion_local,
+          facturador_electronico: data.facturador_electronico !== undefined ? data.facturador_electronico : existing.facturador_electronico,
+          licencias_vhm: data.licencias_vhm !== undefined ? data.licencias_vhm : existing.licencias_vhm,
+          dgii_source: data.dgii_source !== undefined ? data.dgii_source : existing.dgii_source,
+          dgii_last_verified_at: data.dgii_last_verified_at ? new Date(data.dgii_last_verified_at) : existing.dgii_last_verified_at,
+          dgii_metadata_json: data.dgii_metadata !== undefined ? JSON.stringify(data.dgii_metadata) : existing.dgii_metadata_json,
+          total_invoiced: data.total_invoiced ?? existing.total_invoiced
+        } })
+      : await this.prisma.supplier.create({ data: {
+          id: data.id || id('sup'),
+          organization_id: orgId,
+          rnc: data.rnc || '',
+          rnc_normalized: normalizedRnc,
+          name: data.name || 'Proveedor Nuevo',
+          trade_name: data.trade_name || data.name,
+          phone: data.phone,
+          email: data.email,
+          category_default: data.category_default,
+          status_dgii: data.status_dgii || 'DESCONOCIDO',
+          categoria_dgii: data.categoria_dgii,
+          regimen_de_pagos: data.regimen_de_pagos,
+          actividad_economica: data.actividad_economica,
+          administracion_local: data.administracion_local,
+          facturador_electronico: data.facturador_electronico,
+          licencias_vhm: data.licencias_vhm,
+          dgii_source: data.dgii_source,
+          dgii_last_verified_at: data.dgii_last_verified_at ? new Date(data.dgii_last_verified_at) : undefined,
+          dgii_metadata_json: data.dgii_metadata === undefined ? undefined : JSON.stringify(data.dgii_metadata),
+          total_invoiced: data.total_invoiced ?? 0
+        } });
     return this.toSupplier(saved);
+  }
+
+  async createVerifiedSupplier(orgId: string, taxpayer: DgiiTaxpayerData): Promise<{ supplier: Supplier; created: boolean }> {
+    const rnc = taxpayer.rnc.replace(/\D/g, '');
+    const existing = await this.findSupplierByNormalizedRnc(orgId, rnc);
+    if (existing) return { supplier: existing, created: false };
+    try {
+      const row = await this.prisma.supplier.create({ data: {
+        id: id('sup'),
+        organization_id: orgId,
+        rnc,
+        rnc_normalized: rnc,
+        name: taxpayer.name,
+        trade_name: taxpayer.trade_name,
+        status_dgii: taxpayer.status,
+        categoria_dgii: taxpayer.categoria,
+        regimen_de_pagos: taxpayer.regimen_de_pagos,
+        actividad_economica: taxpayer.actividad_economica,
+        administracion_local: taxpayer.administracion_local,
+        facturador_electronico: taxpayer.facturador_electronico,
+        licencias_vhm: taxpayer.licencias_vhm,
+        dgii_source: taxpayer.source,
+        dgii_last_verified_at: new Date(),
+        dgii_metadata_json: JSON.stringify(taxpayer.raw),
+        total_invoiced: 0
+      } });
+      return { supplier: this.toSupplier(row), created: true };
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        const raced = await this.findSupplierByNormalizedRnc(orgId, rnc);
+        if (raced) return { supplier: raced, created: false };
+      }
+      throw error;
+    }
   }
 
   async deleteSupplier(orgId: string, supplierId: string): Promise<boolean> {
@@ -1453,6 +1603,158 @@ export class PrismaRepository {
     return this.toReceipt(row);
   }
 
+  async createReceiptSession(orgId: string): Promise<ReceiptSessionRecord> {
+    const row = await this.prisma.receiptSession.create({
+      data: { id: id('rs'), organization_id: orgId, status: 'CAPTURING' },
+      include: { segments: { orderBy: { segment_index: 'asc' } }, expense: { select: { id: true } } }
+    });
+    return this.toReceiptSession(row);
+  }
+
+  async getReceiptSessionById(orgId: string, sessionId: string, includeImages = false): Promise<ReceiptSessionRecord | null> {
+    const row = await this.prisma.receiptSession.findFirst({
+      where: { id: sessionId, organization_id: orgId },
+      include: { segments: { orderBy: { segment_index: 'asc' } }, expense: { select: { id: true } } }
+    });
+    return row ? this.toReceiptSession(row, includeImages) : null;
+  }
+
+  async getReceiptSegmentById(orgId: string, sessionId: string, segmentId: string, includeImage = false): Promise<ReceiptSegmentRecord | null> {
+    const row = await this.prisma.receiptSegment.findFirst({
+      where: { id: segmentId, receipt_session_id: sessionId, organization_id: orgId }
+    });
+    return row ? this.toReceiptSegment(row, includeImage) : null;
+  }
+
+  async beginReceiptSessionProcessing(orgId: string, sessionId: string): Promise<void> {
+    const claimed = await this.prisma.receiptSession.updateMany({
+      where: { id: sessionId, organization_id: orgId, status: { in: ['CAPTURING', 'REVIEW_REQUIRED', 'FAILED'] } },
+      data: { status: 'PROCESSING', error: null }
+    });
+    if (claimed.count === 1) return;
+    const session = await this.prisma.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+    if (!session) throw new RepositoryError('Sesión de comprobante no encontrada.', 404, 'RECEIPT_SESSION_NOT_FOUND');
+    if (session.status === 'SAVED') throw new RepositoryError('El comprobante ya fue guardado como gasto.', 409, 'RECEIPT_SESSION_SAVED');
+    throw new RepositoryError('La sesión ya se está procesando o no admite reprocesamiento.', 409, 'RECEIPT_SESSION_PROCESSING');
+  }
+
+  async addReceiptSegment(orgId: string, sessionId: string, data: Partial<ReceiptSegmentRecord>): Promise<ReceiptSessionRecord> {
+    await this.prisma.$transaction(async tx => {
+      const session = await tx.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+      if (!session) throw new RepositoryError('Sesión de comprobante no encontrada.', 404, 'RECEIPT_SESSION_NOT_FOUND');
+      if (!['CAPTURING', 'REVIEW_REQUIRED', 'FAILED'].includes(session.status)) {
+        throw new RepositoryError('La sesión no admite nuevos segmentos en su estado actual.', 409, 'RECEIPT_SESSION_NOT_CAPTURING');
+      }
+      const segments = await tx.receiptSegment.findMany({ where: { receipt_session_id: sessionId, organization_id: orgId }, orderBy: { segment_index: 'desc' } });
+      if (segments.length >= 20) throw new RepositoryError('El comprobante alcanzó el máximo de 20 segmentos.', 422, 'RECEIPT_SEGMENT_LIMIT');
+      const segmentIndex = segments.length === 0 ? 0 : segments[0].segment_index + 1;
+      await tx.receiptSegment.create({ data: {
+        id: data.id || id('rseg'),
+        organization_id: orgId,
+        receipt_session_id: sessionId,
+        segment_index: segmentIndex,
+        status: 'UPLOADED',
+        image_url: data.image_url,
+        image_base64: data.image_base64,
+        file_name: data.file_name || `segmento_${segmentIndex + 1}.jpg`,
+        mime_type: data.mime_type || 'image/jpeg'
+      } });
+      await tx.receiptSession.update({ where: { id: sessionId }, data: { status: 'CAPTURING', segments_count: segments.length + 1, error: null } });
+    });
+    return (await this.getReceiptSessionById(orgId, sessionId))!;
+  }
+
+  async replaceReceiptSegment(orgId: string, sessionId: string, segmentId: string, data: Partial<ReceiptSegmentRecord>): Promise<ReceiptSegmentRecord> {
+    const existing = await this.prisma.receiptSegment.findFirst({ where: { id: segmentId, receipt_session_id: sessionId, organization_id: orgId } });
+    if (!existing) throw new RepositoryError('Segmento no encontrado.', 404, 'RECEIPT_SEGMENT_NOT_FOUND');
+    const row = await this.prisma.receiptSegment.update({ where: { id: segmentId }, data: {
+      image_url: data.image_url !== undefined ? data.image_url : existing.image_url,
+      image_base64: data.image_base64 !== undefined ? data.image_base64 : existing.image_base64,
+      file_name: data.file_name !== undefined ? data.file_name : existing.file_name,
+      mime_type: data.mime_type || existing.mime_type,
+      status: 'UPLOADED',
+      ocr_text: null,
+      extraction_json: null,
+      confidence: null,
+      error: null
+    } });
+    await this.prisma.receiptSession.update({ where: { id: sessionId }, data: { status: 'CAPTURING', error: null } });
+    return this.toReceiptSegment(row);
+  }
+
+  async deleteReceiptSegment(orgId: string, sessionId: string, segmentId: string): Promise<ReceiptSessionRecord> {
+    await this.prisma.$transaction(async tx => {
+      const session = await tx.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+      if (!session) throw new RepositoryError('Sesión de comprobante no encontrada.', 404, 'RECEIPT_SESSION_NOT_FOUND');
+      if (session.status === 'PROCESSING') throw new RepositoryError('No se puede eliminar un segmento durante el procesamiento.', 409, 'RECEIPT_SESSION_PROCESSING');
+      const segment = await tx.receiptSegment.findFirst({ where: { id: segmentId, receipt_session_id: sessionId, organization_id: orgId } });
+      if (!segment) throw new RepositoryError('Segmento no encontrado.', 404, 'RECEIPT_SEGMENT_NOT_FOUND');
+      await tx.receiptSegment.delete({ where: { id: segmentId } });
+      const remaining = await tx.receiptSegment.findMany({ where: { receipt_session_id: sessionId }, orderBy: { segment_index: 'asc' } });
+      for (const item of remaining) await tx.receiptSegment.update({ where: { id: item.id }, data: { segment_index: item.segment_index + 1000 } });
+      for (let index = 0; index < remaining.length; index += 1) await tx.receiptSegment.update({ where: { id: remaining[index].id }, data: { segment_index: index } });
+      await tx.receiptSession.update({ where: { id: sessionId }, data: { status: 'CAPTURING', segments_count: remaining.length, error: null } });
+    });
+    return (await this.getReceiptSessionById(orgId, sessionId))!;
+  }
+
+  async reorderReceiptSegments(orgId: string, sessionId: string, orderedIds: string[]): Promise<ReceiptSessionRecord> {
+    await this.prisma.$transaction(async tx => {
+      const session = await tx.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+      if (!session) throw new RepositoryError('Sesión de comprobante no encontrada.', 404, 'RECEIPT_SESSION_NOT_FOUND');
+      if (session.status === 'PROCESSING') throw new RepositoryError('No se puede reordenar durante el procesamiento.', 409, 'RECEIPT_SESSION_PROCESSING');
+      const segments = await tx.receiptSegment.findMany({ where: { receipt_session_id: sessionId, organization_id: orgId } });
+      const currentIds = new Set(segments.map(segment => segment.id));
+      if (orderedIds.length !== segments.length || new Set(orderedIds).size !== orderedIds.length || orderedIds.some(segmentId => !currentIds.has(segmentId))) {
+        throw new RepositoryError('El orden debe incluir exactamente todos los segmentos de la sesión.', 422, 'RECEIPT_SEGMENT_ORDER_INVALID');
+      }
+      for (const segment of segments) await tx.receiptSegment.update({ where: { id: segment.id }, data: { segment_index: segment.segment_index + 1000 } });
+      for (let index = 0; index < orderedIds.length; index += 1) await tx.receiptSegment.update({ where: { id: orderedIds[index] }, data: { segment_index: index } });
+    });
+    return (await this.getReceiptSessionById(orgId, sessionId))!;
+  }
+
+  async updateReceiptSegmentOcr(orgId: string, sessionId: string, segmentId: string, data: Partial<ReceiptSegmentRecord>): Promise<ReceiptSegmentRecord> {
+    const existing = await this.prisma.receiptSegment.findFirst({ where: { id: segmentId, receipt_session_id: sessionId, organization_id: orgId } });
+    if (!existing) throw new RepositoryError('Segmento no encontrado.', 404, 'RECEIPT_SEGMENT_NOT_FOUND');
+    const row = await this.prisma.receiptSegment.update({ where: { id: segmentId }, data: {
+      status: data.status || existing.status,
+      ocr_text: data.ocr_text !== undefined ? data.ocr_text : existing.ocr_text,
+      extraction_json: data.extraction !== undefined ? JSON.stringify(data.extraction) : existing.extraction_json,
+      confidence: data.confidence !== undefined ? data.confidence : existing.confidence,
+      error: data.error !== undefined ? data.error || null : existing.error
+    } });
+    return this.toReceiptSegment(row);
+  }
+
+  async updateReceiptSession(orgId: string, sessionId: string, data: Partial<ReceiptSessionRecord>): Promise<ReceiptSessionRecord> {
+    const existing = await this.prisma.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+    if (!existing) throw new RepositoryError('Sesión de comprobante no encontrada.', 404, 'RECEIPT_SESSION_NOT_FOUND');
+    await this.prisma.receiptSession.update({ where: { id: sessionId }, data: {
+      status: data.status || existing.status,
+      supplier_id: data.supplier_id !== undefined ? data.supplier_id : existing.supplier_id,
+      extraction_json: data.extraction !== undefined ? JSON.stringify(data.extraction) : existing.extraction_json,
+      fiscal_validation_json: data.fiscal_validation !== undefined ? JSON.stringify(data.fiscal_validation) : existing.fiscal_validation_json,
+      reconciliation_json: data.reconciliation !== undefined ? JSON.stringify(data.reconciliation) : existing.reconciliation_json,
+      supplier_resolution_json: data.supplier_resolution !== undefined ? JSON.stringify(data.supplier_resolution) : existing.supplier_resolution_json,
+      meta_json: data.meta !== undefined ? JSON.stringify(data.meta) : existing.meta_json,
+      segments_count: data.segments_count ?? existing.segments_count,
+      duplicates_removed: data.duplicates_removed ?? existing.duplicates_removed,
+      error: data.error !== undefined ? data.error || null : existing.error
+    } });
+    return (await this.getReceiptSessionById(orgId, sessionId))!;
+  }
+
+  async linkExpenseToReceiptSession(orgId: string, sessionId: string, expenseId: string): Promise<void> {
+    const session = await this.prisma.receiptSession.findFirst({ where: { id: sessionId, organization_id: orgId } });
+    const expense = await this.prisma.expense.findFirst({ where: { id: expenseId, organization_id: orgId } });
+    if (!session || !expense) throw new RepositoryError('Sesión o gasto no encontrado dentro de la organización.', 404, 'RECEIPT_EXPENSE_NOT_FOUND');
+    await this.prisma.$transaction([
+      this.prisma.expense.update({ where: { id: expenseId }, data: { receipt_session_id: sessionId, supplier_id: session.supplier_id } }),
+      this.prisma.receiptSession.update({ where: { id: sessionId }, data: { status: 'SAVED' } })
+    ]);
+  }
+
   async getWebhooks(orgId: string): Promise<WebhookSubscription[]> {
     const rows = await this.prisma.webhookSubscription.findMany({ where: { organization_id: orgId }, orderBy: { created_at: 'desc' } });
     return rows.map(row => this.toWebhook(row));
@@ -1626,6 +1928,19 @@ export class PrismaRepository {
     ]);
     if (!company) throw new RepositoryError('La empresa de la erogación no pertenece a la organización.', 422, 'EXPENSE_COMPANY_SCOPE_INVALID');
     if (!branch || branch.company_id !== companyId) throw new RepositoryError('La sucursal de la erogación no pertenece a la empresa.', 422, 'EXPENSE_BRANCH_SCOPE_INVALID');
+    if (data.supplier_id) {
+      const supplier = await this.prisma.supplier.findFirst({ where: { id: data.supplier_id, organization_id: orgId } });
+      if (!supplier) throw new RepositoryError('El proveedor no pertenece a la organización.', 422, 'EXPENSE_SUPPLIER_SCOPE_INVALID');
+    }
+    const receiptSessionId = data.receipt_session_id || existing?.receipt_session_id;
+    if (receiptSessionId) {
+      const receiptSession = await this.prisma.receiptSession.findFirst({ where: { id: receiptSessionId, organization_id: orgId } });
+      if (!receiptSession) throw new RepositoryError('La sesión del comprobante no pertenece a la organización.', 422, 'EXPENSE_RECEIPT_SESSION_SCOPE_INVALID');
+      const linksNewSession = !existing || (data.receipt_session_id !== undefined && data.receipt_session_id !== existing.receipt_session_id);
+      if ((data.status || existing?.status) === 'APROBADO' && receiptSession.status !== 'PROCESSED' && linksNewSession) {
+        throw new RepositoryError('El comprobante requiere revisión antes de ser aprobado.', 422, 'EXPENSE_RECEIPT_REVIEW_REQUIRED');
+      }
+    }
 
     const value = (key: keyof ExpenseRecord, fallback: any) => (data[key] !== undefined ? data[key] : fallback);
     const expenseId = existing?.id || data.id || id('exp');
@@ -1641,6 +1956,7 @@ export class PrismaRepository {
       supplier_name: value('supplier_name', existing?.supplier_name || 'Proveedor No Identificado'),
       supplier_rnc: value('supplier_rnc', existing?.supplier_rnc || ''),
       supplier_id: value('supplier_id', existing?.supplier_id || null),
+      receipt_session_id: value('receipt_session_id', existing?.receipt_session_id || null),
       ncf: value('ncf', existing?.ncf || ''),
       ncf_type: value('ncf_type', existing?.ncf_type || 'B01'),
       document_type: value('document_type', existing?.document_type || 'FACTURA_CREDITO_FISCAL'),
@@ -1689,10 +2005,19 @@ export class PrismaRepository {
             itbis_rate: Number(item.itbis_rate) || 0,
             total: Number(item.total) || 0,
             sku: item.sku,
+            discount: item.discount,
+            taxable_amount: item.taxable_amount,
+            itbis_amount: item.itbis_amount,
+            segment_index: item.segment_index,
+            confidence: item.confidence,
+            raw_text: item.raw_text,
             cost_center_id: item.cost_center_id,
             project_id: item.project_id
           })) });
         }
+      }
+      if (data.receipt_session_id) {
+        await tx.receiptSession.update({ where: { id: data.receipt_session_id }, data: { status: 'SAVED', supplier_id: data.supplier_id || null } });
       }
       await this.auditTx(tx, { organization_id: orgId, user_id: creator.id, user_name: creator.name, action: existing ? 'ACTUALIZAR_GASTO' : 'CREAR_GASTO', entity_type: 'EXPENSE', entity_id: expense.id, details: `${existing ? 'Actualizó' : 'Radicó'} comprobante ${expense.ncf || 'Borrador'} por RD$ ${expense.total_amount.toFixed(2)}.` });
       return tx.expense.findUniqueOrThrow({ where: { id: expense.id }, include: { line_items: true } });

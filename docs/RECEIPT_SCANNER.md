@@ -7,8 +7,8 @@ Esta guía documenta el flujo productivo de captura de comprobantes, la vista pr
 1. El usuario autenticado abre el escáner desde ErogaAI.
 2. Selecciona una imagen/PDF o inicia la cámara.
 3. El navegador solicita permiso para usar la cámara cuando sea necesario.
-4. ErogaAI captura la fotografía o lee el archivo seleccionado.
-5. El backend procesa el documento con la cadena de proveedores configurada para la organización.
+4. ErogaAI guarda la fotografía como un tramo y permite continuar con hasta 20 imágenes del mismo comprobante.
+5. Al finalizar, el backend procesa primero cada tramo con OCR local, consolida solapes y usa IA solamente cuando la confianza o el cuadre lo requieren.
 6. El usuario revisa los campos fiscales extraídos antes de aprobar el comprobante.
 
 El endpoint de escaneo exige sesión y el permiso RBAC `expenses.create_ocr`. El contexto de organización se obtiene de la sesión del servidor.
@@ -35,10 +35,10 @@ Al cancelar, cerrar o capturar, ErogaAI detiene las pistas activas de la cámara
 
 La cadena se ejecuta en este orden:
 
-1. Proveedor principal activo configurado para la organización.
-2. Proveedores secundarios activos de la misma organización.
-3. Gemini de entorno, únicamente cuando no existen configuraciones activas del tenant y hay una clave de entorno disponible.
-4. Tesseract.js local cuando no hay IA disponible o todos los proveedores configurados fallan.
+1. Tesseract.js local por cada tramo compatible.
+2. Normalización, parser de productos, consolidación y validación matemática.
+3. Proveedor de IA activo del tenant cuando el OCR tiene baja confianza, falta estructura o el total no cuadra.
+4. Gemini de entorno únicamente cuando no existen configuraciones activas del tenant y hay una clave de entorno disponible.
 
 Los proveedores de IA admitidos son Google Gemini, Groq, OpenAI y CodeMorf Cloud. Las configuraciones, claves cifradas, modelo y estado se mantienen tenant-scoped en PostgreSQL.
 
@@ -73,7 +73,7 @@ El worker local se reutiliza entre solicitudes y procesa una tarea a la vez. Est
 - Clasificación y categoría sugeridas.
 - Texto OCR original.
 
-El OCR local limita deliberadamente su confianza máxima a 70 y agrega una observación de revisión manual. RNC, NCF, fecha y montos deben validarse antes de aprobar el gasto.
+La confianza local combina la confianza de Tesseract con los campos y líneas realmente encontrados, con un máximo de 92. Un tramo por debajo de `LOCAL_OCR_CONFIDENCE_THRESHOLD` requiere apoyo de IA o revisión manual. RNC, NCF, fecha, productos y montos se validan antes de aprobar el gasto.
 
 ## Configuración
 
@@ -119,9 +119,9 @@ curl -fsS https://DOMINIO/api/ready
 ### OCR
 
 1. Procesar una imagen JPG, PNG o WEBP con los proveedores de IA desactivados.
-2. Confirmar que la respuesta identifica `provider_used` como `TESSERACT` y `model_used` como `tesseract.js-7-spa+eng`.
-3. Revisar que la interfaz solicite validación manual de los datos extraídos.
-4. Repetir con la IA habilitada y confirmar que el proveedor configurado conserva prioridad.
+2. Confirmar que la respuesta identifica `provider_used` como `TESSERACT` y `model_used` como `tesseract.js-7-spa+eng` cuando la confianza y el cuadre son suficientes.
+3. Revisar que la interfaz solicite validación manual de los datos dudosos.
+4. Repetir con un tramo ambiguo y la IA habilitada; confirmar que el proveedor configurado se usa como apoyo multiimagen.
 
 ## Diagnóstico rápido
 

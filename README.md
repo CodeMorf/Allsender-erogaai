@@ -26,7 +26,7 @@ Diseñado e impulsado por **[CodeMorf Tech](https://codemorf.tech/)**, este sist
 
 ## ✨ Características Principales
 
-- 🧾 **Escáner inteligente de comprobantes**: Captura desde cámara o archivo y extracción automática de NCF, RNC, fecha, subtotal, ITBIS y total. Usa los proveedores de IA configurados y dispone de Tesseract OCR local gratuito como respaldo para imágenes.
+- 🧾 **Escáner inteligente de comprobantes**: Captura tickets largos en hasta 20 tramos, ejecuta OCR local primero, elimina solapes consecutivos, reconcilia productos y totales y usa IA solo cuando la lectura necesita apoyo.
 - 🇩🇴 **Cumplimiento Fiscal DGII 606**: Validación de RNC/Cédula, NCF B01/B02/B14/B15/E31/E32 y exportación directa del reporte 606.
 - 🏢 **Arquitectura Multi-Empresa & Multi-Sede**: Control centralizado para Holdings, sucursales y proyectos con control de acceso basado en roles (RBAC).
 - 🔄 **Integración ERP Flex & API REST**: Sincronización automática de gastos contables con sistemas ERP externos mediante API Keys y Webhooks.
@@ -53,7 +53,7 @@ Este proyecto ha sido concebido, diseñado e implementado por **CodeMorf**:
 
 ### Documentación del escáner
 
-La arquitectura de cámara, la cadena de proveedores, el respaldo OCR gratuito, los formatos compatibles y la guía de diagnóstico están documentados en [docs/RECEIPT_SCANNER.md](docs/RECEIPT_SCANNER.md).
+La cámara y el diagnóstico están documentados en [docs/RECEIPT_SCANNER.md](docs/RECEIPT_SCANNER.md). El flujo por tramos y la resolución fiscal de proveedores se detallan en [docs/MULTI_SEGMENT_RECEIPT_SCANNER.md](docs/MULTI_SEGMENT_RECEIPT_SCANNER.md) y [docs/DGII_SUPPLIER_RESOLUTION.md](docs/DGII_SUPPLIER_RESOLUTION.md).
 
 ---
 

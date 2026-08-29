@@ -4,7 +4,9 @@ import {
   ExpenseClassification, 
   NcfType, 
   ReceiptExtraction, 
-  LineItem 
+  LineItem,
+  ReceiptSessionRecord,
+  ExpenseRecord
 } from '../types.js';
 import { validateRNC, validateNCF, formatCurrency } from '../utils/formatters.js';
 import { 
@@ -17,29 +19,39 @@ import {
   RefreshCw, 
   Plus, 
   Trash2, 
-  Fuel, 
-  Laptop, 
-  UtensilsCrossed, 
-  Boxes, 
   FileText, 
-  Zap,
-  Eye
+  Eye,
+  ArrowUp,
+  ArrowDown,
+  Images
 } from 'lucide-react';
+
+interface CapturedSegment {
+  id: string;
+  segment_index: number;
+  preview: string;
+  file_name: string;
+  mime_type: string;
+  status: string;
+}
 
 export const ExpenseScannerModal: React.FC = () => {
   const { 
     isScannerOpen, 
     closeScanner, 
     createExpense, 
-    currentCompany, 
-    currentBranch, 
     currentUser, 
     aiProviders, 
     showToast 
   } = useApp();
 
-  const [step, setStep] = useState<'SELECT_MODE' | 'CAMERA_ACTIVE' | 'PROCESSING' | 'REVIEW_FORM'>('SELECT_MODE');
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [step, setStep] = useState<'SELECT_MODE' | 'CAMERA_ACTIVE' | 'SEGMENT_REVIEW' | 'PROCESSING' | 'REVIEW_FORM'>('SELECT_MODE');
+  const [receiptSessionId, setReceiptSessionId] = useState<string | null>(null);
+  const [segments, setSegments] = useState<CapturedSegment[]>([]);
+  const [activePreviewIndex, setActivePreviewIndex] = useState(0);
+  const [replaceSegmentId, setReplaceSegmentId] = useState<string | null>(null);
+  const [processedSession, setProcessedSession] = useState<ReceiptSessionRecord | null>(null);
+  const [segmentSaving, setSegmentSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'camera'>('upload');
   
   // Camera state
@@ -79,7 +91,11 @@ export const ExpenseScannerModal: React.FC = () => {
     }
     if (isScannerOpen) {
       setStep('SELECT_MODE');
-      setSelectedImage(null);
+      setReceiptSessionId(null);
+      setSegments([]);
+      setActivePreviewIndex(0);
+      setReplaceSegmentId(null);
+      setProcessedSession(null);
       setCameraError(null);
     }
   }, [isScannerOpen]);
@@ -209,7 +225,68 @@ export const ExpenseScannerModal: React.FC = () => {
     }
   };
 
-  const captureCameraPhoto = () => {
+  const readApiError = async (response: Response, fallback: string) => {
+    try {
+      const payload = await response.json();
+      return payload.error || payload.message || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const ensureReceiptSession = async (): Promise<string> => {
+    if (receiptSessionId) return receiptSessionId;
+    const response = await fetch('/api/receipt-sessions', { method: 'POST' });
+    if (!response.ok) throw new Error(await readApiError(response, 'No se pudo iniciar la sesión del comprobante.'));
+    const payload = await response.json();
+    const sessionId = payload.data?.id as string | undefined;
+    if (!sessionId) throw new Error('El servidor no devolvió la sesión del comprobante.');
+    setReceiptSessionId(sessionId);
+    return sessionId;
+  };
+
+  const persistSegment = async (imageSrc: string, fileName: string, mimeType: string) => {
+    setSegmentSaving(true);
+    try {
+      const sessionId = await ensureReceiptSession();
+      const replacingId = replaceSegmentId;
+      const endpoint = replacingId
+        ? `/api/receipt-sessions/${sessionId}/segments/${replacingId}`
+        : `/api/receipt-sessions/${sessionId}/segments`;
+      const response = await fetch(endpoint, {
+        method: replacingId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: imageSrc, file_name: fileName, mime_type: mimeType })
+      });
+      if (!response.ok) throw new Error(await readApiError(response, 'No se pudo guardar el segmento.'));
+      const payload = await response.json();
+
+      if (replacingId) {
+        const saved = payload.data;
+        setSegments(current => current.map(segment => segment.id === replacingId
+          ? { ...segment, preview: imageSrc, file_name: fileName, mime_type: mimeType, status: saved?.status || 'UPLOADED' }
+          : segment));
+        setReplaceSegmentId(null);
+      } else {
+        const session = payload.data as ReceiptSessionRecord;
+        const saved = session.segments[session.segments.length - 1];
+        setSegments(current => [...current, {
+          id: saved.id,
+          segment_index: saved.segment_index,
+          preview: imageSrc,
+          file_name: saved.file_name || fileName,
+          mime_type: saved.mime_type || mimeType,
+          status: saved.status
+        }]);
+        setActivePreviewIndex(session.segments.length - 1);
+      }
+      setStep('SEGMENT_REVIEW');
+    } finally {
+      setSegmentSaving(false);
+    }
+  };
+
+  const captureCameraPhoto = async () => {
     const video = videoRef.current;
     if (!video || !cameraStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
       setCameraError('La cámara todavía está iniciando. Espera un momento e inténtalo de nuevo.');
@@ -227,7 +304,12 @@ export const ExpenseScannerModal: React.FC = () => {
         cameraStream.getTracks().forEach(t => t.stop());
         setCameraStream(null);
       }
-      processImageForOCR(dataUrl);
+      try {
+        await persistSegment(dataUrl, `segmento_${segments.length + 1}.jpg`, 'image/jpeg');
+      } catch (error: any) {
+        showToast('error', 'No se guardó la foto', error.message || 'Inténtalo nuevamente.');
+        setStep(segments.length > 0 ? 'SEGMENT_REVIEW' : 'SELECT_MODE');
+      }
     }
   };
 
@@ -235,37 +317,48 @@ export const ExpenseScannerModal: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64 = reader.result as string;
-      processImageForOCR(base64);
+      try {
+        await persistSegment(base64, file.name, file.type || 'image/jpeg');
+      } catch (error: any) {
+        showToast('error', 'No se guardó el archivo', error.message || 'Inténtalo nuevamente.');
+        setStep(segments.length > 0 ? 'SEGMENT_REVIEW' : 'SELECT_MODE');
+      } finally {
+        e.target.value = '';
+      }
     };
     reader.readAsDataURL(file);
   };
 
-  const processImageForOCR = async (imageSrc: string) => {
-    setSelectedImage(imageSrc);
+  const processReceiptSession = async () => {
+    if (!receiptSessionId || segments.length === 0) return;
     setStep('PROCESSING');
-    setProcessingStatus('Inicializando motor de visión con IA...');
+    setProcessingStatus('Leyendo cada tramo con OCR local...');
 
     try {
-      setTimeout(() => setProcessingStatus('Extrayendo RNC, NCF y validando base DGII...'), 500);
-      setTimeout(() => setProcessingStatus('Desglosando ITBIS (18%), Subtotal y Clasificación contable...'), 1100);
-
-      const res = await fetch('/api/ai/ocr-extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_base64: imageSrc.startsWith('data:') ? imageSrc : undefined,
-          image_url: imageSrc.startsWith('http') ? imageSrc : undefined
-        })
-      });
+      const providerTimer = window.setTimeout(() => setProcessingStatus('Consolidando líneas, solapes y totales fiscales...'), 700);
+      const dgiiTimer = window.setTimeout(() => setProcessingStatus('Validando proveedor y estado de empresa...'), 1500);
+      const res = await fetch(`/api/receipt-sessions/${receiptSessionId}/process`, { method: 'POST' });
+      window.clearTimeout(providerTimer);
+      window.clearTimeout(dgiiTimer);
 
       if (!res.ok) {
-        throw new Error('Fallo en la extracción de datos');
+        throw new Error(await readApiError(res, 'Fallo en la extracción de datos.'));
       }
 
       const data = await res.json();
-      const ext: ReceiptExtraction = data.extraction;
+      const session: ReceiptSessionRecord = data.data;
+      const ext: ReceiptExtraction = session.extraction || {
+        supplier_name: '', supplier_rnc: '', ncf: '', ncf_type: 'B01', date: new Date().toISOString().split('T')[0],
+        document_type: 'RECIBO', subtotal: 0, itbis_amount: 0, legal_tip_amount: 0, other_taxes: 0, total_amount: 0,
+        currency: 'DOP', suggested_classification: 'GASTO_OPERATIVO', suggested_category: '', confidence_score: 0, observations: [], line_items: []
+      };
+      setProcessedSession(session);
+      setSegments(current => current.map(segment => {
+        const processed = session.segments.find(item => item.id === segment.id);
+        return processed ? { ...segment, status: processed.status } : segment;
+      }));
 
       setSupplierName(ext.supplier_name || '');
       setSupplierRnc(ext.supplier_rnc || '');
@@ -280,8 +373,8 @@ export const ExpenseScannerModal: React.FC = () => {
       setLegalTipAmount(ext.legal_tip_amount || 0);
       setOtherTaxes(ext.other_taxes || 0);
       setTotalAmount(ext.total_amount || 0);
-      setConfidenceScore(ext.confidence_score || 95);
-      setAiObservations(ext.observations || ['Documento procesado con éxito']);
+      setConfidenceScore(ext.confidence_score || 0);
+      setAiObservations(ext.observations || []);
       
       const parsedItems = (ext.line_items || []).map((li, idx) => ({
         id: `item-${idx}-${Date.now()}`,
@@ -289,26 +382,66 @@ export const ExpenseScannerModal: React.FC = () => {
         quantity: li.quantity,
         unit_price: li.unit_price,
         itbis_rate: li.itbis_rate || 18,
-        total: li.total
+        total: li.total,
+        sku: li.sku,
+        discount: li.discount,
+        taxable_amount: li.taxable_amount,
+        itbis_amount: li.itbis_amount,
+        segment_index: li.segment_index,
+        confidence: li.confidence,
+        raw_text: li.raw_text
       }));
-      setLineItems(parsedItems.length > 0 ? parsedItems : [
-        {
-          id: `item-1`,
-          description: ext.suggested_category || 'Gasto registrado',
-          quantity: 1,
-          unit_price: ext.subtotal || ext.total_amount,
-          itbis_rate: 18,
-          total: ext.total_amount
-        }
-      ]);
+      setLineItems(parsedItems);
 
       setStep('REVIEW_FORM');
-      showToast('success', 'Documento Escaneado', `Datos extraídos con ${ext.confidence_score}% de confianza.`);
+      if (session.status === 'REVIEW_REQUIRED') {
+        showToast('warning', 'Revisión necesaria', 'El comprobante fue leído, pero tiene datos que deben confirmarse.');
+      } else {
+        showToast('success', 'Documento escaneado', `Datos extraídos con ${ext.confidence_score}% de confianza.`);
+      }
     } catch (err: any) {
       console.error('Error processing OCR:', err);
-      showToast('error', 'Error en OCR', 'No se pudo completar el análisis del documento. Puedes ingresar los datos manualmente.');
-      setStep('REVIEW_FORM');
+      showToast('error', 'Error en OCR', err.message || 'No se pudo completar el análisis del documento.');
+      setStep('SEGMENT_REVIEW');
     }
+  };
+
+  const removeSegment = async (segmentId: string) => {
+    if (!receiptSessionId) return;
+    const response = await fetch(`/api/receipt-sessions/${receiptSessionId}/segments/${segmentId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      showToast('error', 'No se eliminó el tramo', await readApiError(response, 'Inténtalo nuevamente.'));
+      return;
+    }
+    setSegments(current => current.filter(segment => segment.id !== segmentId).map((segment, index) => ({ ...segment, segment_index: index })));
+    setActivePreviewIndex(index => Math.max(0, Math.min(index, segments.length - 2)));
+  };
+
+  const reorderSegment = async (segmentId: string, direction: -1 | 1) => {
+    if (!receiptSessionId) return;
+    const fromIndex = segments.findIndex(segment => segment.id === segmentId);
+    const toIndex = fromIndex + direction;
+    if (fromIndex < 0 || toIndex < 0 || toIndex >= segments.length) return;
+    const reordered = [...segments];
+    const [moving] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moving);
+    const response = await fetch(`/api/receipt-sessions/${receiptSessionId}/segments/reorder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segment_ids: reordered.map(segment => segment.id) })
+    });
+    if (!response.ok) {
+      showToast('error', 'No se cambió el orden', await readApiError(response, 'Inténtalo nuevamente.'));
+      return;
+    }
+    setSegments(reordered.map((segment, index) => ({ ...segment, segment_index: index })));
+    setActivePreviewIndex(toIndex);
+  };
+
+  const repeatSegment = (segmentId: string) => {
+    setReplaceSegmentId(segmentId);
+    setActiveTab('camera');
+    void startCamera();
   };
 
   const handleRecalculateTotals = (newSubtotal: number, newItbis: number, newTip: number, newOther: number) => {
@@ -337,6 +470,10 @@ export const ExpenseScannerModal: React.FC = () => {
 
   const handleSaveExpense = async (status: 'BORRADOR' | 'PENDIENTE_REVISION' | 'APROBADO') => {
     try {
+      const reportedProvider = processedSession?.meta?.provider_used || activeProvider?.provider_type || 'TESSERACT';
+      const aiProviderUsed: ExpenseRecord['ai_provider_used'] = ['GEMINI', 'GROQ', 'OPENAI', 'CODEMORF'].includes(reportedProvider)
+        ? reportedProvider as ExpenseRecord['ai_provider_used']
+        : 'TESSERACT';
       await createExpense({
         date,
         supplier_name: supplierName,
@@ -354,10 +491,14 @@ export const ExpenseScannerModal: React.FC = () => {
         currency: 'DOP',
         payment_method: paymentMethod,
         status,
-        receipt_image_url: selectedImage || undefined,
+        supplier_id: processedSession?.supplier_id,
+        receipt_session_id: receiptSessionId || undefined,
+        receipt_image_url: receiptSessionId && segments[0]
+          ? `/api/receipt-sessions/${receiptSessionId}/segments/${segments[0].id}/image`
+          : undefined,
         ai_confidence_score: confidenceScore,
-        ai_provider_used: activeProvider?.provider_type || 'GEMINI',
-        ai_model_used: activeProvider?.selected_model || 'gemini-2.5-flash',
+        ai_provider_used: aiProviderUsed,
+        ai_model_used: processedSession?.meta?.model_used || activeProvider?.selected_model || 'ocr-local',
         line_items: lineItems,
         approval_notes: status === 'APROBADO' ? 'Aprobación directa por Supervisor/Admin.' : undefined
       });
@@ -387,7 +528,7 @@ export const ExpenseScannerModal: React.FC = () => {
                 {step === 'REVIEW_FORM' ? 'Verificación y Corrección de Erogación' : 'Capturar o Escanear Comprobante Fiscal'}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Extracción inteligente con IA ({activeProvider?.name || 'Google Gemini Pro'})
+                OCR local primero; IA solo cuando haga falta
               </p>
             </div>
           </div>
@@ -509,10 +650,96 @@ export const ExpenseScannerModal: React.FC = () => {
                 </button>
                 <button
                   onClick={captureCameraPhoto}
+                  disabled={segmentSaving}
                   className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-bold text-sm shadow-lg shadow-blue-600/30"
                 >
                   <Camera className="w-4 h-4" />
-                  <span>Capturar Fotografía</span>
+                  <span>{segmentSaving ? 'Guardando...' : replaceSegmentId ? 'Repetir Fotografía' : 'Capturar Fotografía'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step: Multi-segment capture review */}
+          {step === 'SEGMENT_REVIEW' && (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+                <p className="font-bold">Comprobante largo: {segments.length} de 20 tramos</p>
+                <p className="mt-1">En cada foto siguiente repite aproximadamente 15–20% del final anterior. ErogaAI elimina únicamente el solape consecutivo.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                <div className="lg:col-span-7">
+                  <div className="relative min-h-72 rounded-2xl border border-slate-200 bg-slate-950 p-3 dark:border-slate-700 flex items-center justify-center overflow-hidden">
+                    {segments[activePreviewIndex]?.mime_type === 'application/pdf' ? (
+                      <div className="text-center text-white">
+                        <FileText className="mx-auto h-12 w-12" />
+                        <p className="mt-2 text-xs font-semibold">{segments[activePreviewIndex]?.file_name}</p>
+                      </div>
+                    ) : (
+                      <img
+                        src={segments[activePreviewIndex]?.preview}
+                        alt={`Tramo ${activePreviewIndex + 1}`}
+                        className="max-h-[52vh] w-auto object-contain"
+                      />
+                    )}
+                    <span className="absolute left-3 top-3 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-bold text-white">
+                      Tramo {activePreviewIndex + 1}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                      <Images className="h-4 w-4 text-blue-600" /> Tramos capturados
+                    </h3>
+                    <span className="text-[11px] text-slate-500">Orden de lectura</span>
+                  </div>
+                  <div className="max-h-[47vh] space-y-2 overflow-y-auto pr-1">
+                    {segments.map((segment, index) => (
+                      <div
+                        key={segment.id}
+                        className={`flex items-center gap-2 rounded-xl border p-2 ${index === activePreviewIndex ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30' : 'border-slate-200 dark:border-slate-700'}`}
+                      >
+                        <button type="button" onClick={() => setActivePreviewIndex(index)} className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-slate-900">
+                          {segment.mime_type === 'application/pdf' ? (
+                            <FileText className="m-auto h-full w-6 text-white" />
+                          ) : (
+                            <img src={segment.preview} alt="" className="h-full w-full object-cover" />
+                          )}
+                        </button>
+                        <button type="button" onClick={() => setActivePreviewIndex(index)} className="min-w-0 flex-1 text-left">
+                          <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">Tramo {index + 1}</span>
+                          <span className="block truncate text-[10px] text-slate-500">{segment.file_name}</span>
+                          <span className={`text-[10px] font-semibold ${['FAILED', 'LOW_CONFIDENCE'].includes(segment.status) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {segment.status === 'FAILED' ? '⚠ Falló' : segment.status === 'LOW_CONFIDENCE' ? '⚠ Foto borrosa o ambigua' : segment.status === 'OCR_COMPLETED' ? '✓ OCR completo' : '✓ Guardado'}
+                          </span>
+                        </button>
+                        <div className="grid grid-cols-2 gap-1">
+                          <button type="button" onClick={() => reorderSegment(segment.id, -1)} disabled={index === 0} aria-label="Subir tramo" className="rounded p-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30 dark:hover:bg-slate-700"><ArrowUp className="h-3.5 w-3.5" /></button>
+                          <button type="button" onClick={() => reorderSegment(segment.id, 1)} disabled={index === segments.length - 1} aria-label="Bajar tramo" className="rounded p-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30 dark:hover:bg-slate-700"><ArrowDown className="h-3.5 w-3.5" /></button>
+                          <button type="button" onClick={() => repeatSegment(segment.id)} aria-label="Repetir foto" className="rounded p-1 text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-950"><RefreshCw className="h-3.5 w-3.5" /></button>
+                          <button type="button" onClick={() => removeSegment(segment.id)} aria-label="Eliminar tramo" className="rounded p-1 text-rose-600 hover:bg-rose-100 dark:hover:bg-rose-950"><Trash2 className="h-3.5 w-3.5" /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => { setReplaceSegmentId(null); setActiveTab('camera'); void startCamera(); }} disabled={segments.length >= 20} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-40 dark:border-slate-700 dark:text-slate-200">
+                    <Camera className="h-4 w-4" /> Agregar siguiente tramo
+                  </button>
+                  <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200 ${segments.length >= 20 ? 'pointer-events-none opacity-40' : 'cursor-pointer'}`}>
+                    <Upload className="h-4 w-4" /> Subir otro tramo
+                    <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" />
+                  </label>
+                </div>
+                <button type="button" onClick={processReceiptSession} disabled={segments.length === 0 || segmentSaving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
+                  <Sparkles className="h-4 w-4" /> Finalizar y procesar
                 </button>
               </div>
             </div>
@@ -528,13 +755,13 @@ export const ExpenseScannerModal: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Procesando Comprobante con IA
+                  Procesando comprobante completo
                 </h3>
                 <p className="text-xs text-blue-600 dark:text-blue-400 font-medium">
                   {processingStatus}
                 </p>
                 <p className="text-[11px] text-slate-400">
-                  Motor: {activeProvider?.name} ({activeProvider?.selected_model})
+                  OCR local por tramo y verificación inteligente cuando sea necesaria
                 </p>
               </div>
             </div>
@@ -549,26 +776,50 @@ export const ExpenseScannerModal: React.FC = () => {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <Eye className="w-3.5 h-3.5 text-blue-600" />
-                      Comprobante Original
+                      Comprobante completo ({segments.length} tramos)
                     </span>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300">
                       IA Score: {confidenceScore}%
                     </span>
                   </div>
-                  {selectedImage ? (
+                  {segments[activePreviewIndex] ? (
                     <div className="relative rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-950 max-h-64 flex items-center justify-center">
-                      <img
-                        src={selectedImage}
-                        alt="Comprobante"
-                        className="max-h-64 w-auto object-contain"
-                      />
+                      {segments[activePreviewIndex].mime_type === 'application/pdf' ? (
+                        <div className="py-12 text-center text-white"><FileText className="mx-auto h-10 w-10" /><p className="mt-2 text-xs">{segments[activePreviewIndex].file_name}</p></div>
+                      ) : (
+                        <img
+                          src={segments[activePreviewIndex].preview}
+                          alt={`Tramo ${activePreviewIndex + 1}`}
+                          className="max-h-64 w-auto object-contain"
+                        />
+                      )}
                     </div>
                   ) : (
                     <div className="h-40 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs text-slate-400">
                       Sin vista previa
                     </div>
                   )}
+                  {segments.length > 1 && (
+                    <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+                      {segments.map((segment, index) => (
+                        <button key={segment.id} type="button" onClick={() => setActivePreviewIndex(index)} className={`h-12 w-12 shrink-0 overflow-hidden rounded border-2 bg-slate-900 ${index === activePreviewIndex ? 'border-blue-500' : 'border-transparent'}`}>
+                          {segment.mime_type === 'application/pdf' ? <FileText className="m-auto h-full w-5 text-white" /> : <img src={segment.preview} alt="" className="h-full w-full object-cover" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
+                {processedSession && (
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Segmentos</span><strong>{processedSession.segments_count}</strong></div>
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Productos</span><strong>{lineItems.length}</strong></div>
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Solapes eliminados</span><strong>{processedSession.duplicates_removed}</strong></div>
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Cuadre matemático</span><strong className={processedSession.reconciliation?.is_valid ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.reconciliation?.is_valid ? 'Correcto' : `Revisar ${formatCurrency(Math.abs(processedSession.reconciliation?.difference || 0), 'DOP')}`}</strong></div>
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Empresa</span><strong className={processedSession.supplier_resolution?.dgii_status === 'ACTIVO' ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.supplier_resolution?.dgii_status || 'Sin validar'}</strong></div>
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><span className="block text-slate-500">Proveedor</span><strong className={['EXISTING', 'CREATED'].includes(processedSession.supplier_resolution?.status || '') ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.supplier_resolution?.status === 'CREATED' ? 'Creado automáticamente' : processedSession.supplier_resolution?.status === 'EXISTING' ? 'Existente' : 'Pendiente de validación'}</strong></div>
+                  </div>
+                )}
 
                 {/* AI Observations Box */}
                 {aiObservations.length > 0 && (
@@ -724,6 +975,9 @@ export const ExpenseScannerModal: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                        {lineItems.length === 0 && (
+                          <tr><td colSpan={5} className="p-4 text-center text-[11px] text-amber-700 dark:text-amber-400">No se detectaron líneas de productos. Revise el comprobante o agregue los conceptos manualmente; ErogaAI no inventa líneas.</td></tr>
+                        )}
                         {lineItems.map(item => (
                           <tr key={item.id}>
                             <td className="p-1.5">
@@ -824,10 +1078,10 @@ export const ExpenseScannerModal: React.FC = () => {
             <>
               <button
                 type="button"
-                onClick={() => setStep('SELECT_MODE')}
+                onClick={() => setStep('SEGMENT_REVIEW')}
                 className="px-3.5 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg"
               >
-                Volver a Escanear
+                Revisar tramos
               </button>
 
               <div className="flex items-center gap-2.5">
@@ -849,7 +1103,7 @@ export const ExpenseScannerModal: React.FC = () => {
                   Enviar a Revisión
                 </button>
 
-                {(currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'ACCOUNTANT') && (
+                {processedSession?.status === 'PROCESSED' && (currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'ACCOUNTANT') && (
                   <button
                     type="button"
                     id="btn-approve-direct"

@@ -114,6 +114,134 @@ paths:
         '200':
           description: Lista de centros de costo.
 
+  /receipt-sessions:
+    post:
+      summary: Iniciar comprobante de uno o varios tramos
+      description: Crea una sesión tenant-scoped en estado CAPTURING. Requiere scope `ocr:process`.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '201':
+          description: Sesión creada.
+
+  /receipt-sessions/{id}:
+    get:
+      summary: Consultar sesión y estados de sus tramos
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+      responses:
+        '200':
+          description: Sesión consolidada, segmentos y validaciones.
+        '404':
+          description: Sesión inexistente o perteneciente a otro tenant.
+
+  /receipt-sessions/{id}/segments:
+    post:
+      summary: Agregar un tramo al comprobante
+      description: Guarda una imagen individual. La sesión admite hasta 20 tramos y no procesa automáticamente.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptSegmentInput'
+      responses:
+        '201':
+          description: Tramo guardado.
+        '422':
+          description: Se alcanzó el límite de 20 tramos.
+
+  /receipt-sessions/{id}/segments/reorder:
+    patch:
+      summary: Reordenar todos los tramos
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [segment_ids]
+              properties:
+                segment_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Orden actualizado.
+
+  /receipt-sessions/{id}/segments/{segmentId}:
+    put:
+      summary: Repetir o reemplazar solo un tramo
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+        - $ref: '#/components/parameters/ReceiptSegmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptSegmentInput'
+      responses:
+        '200':
+          description: Imagen reemplazada y OCR anterior descartado.
+    delete:
+      summary: Eliminar un tramo
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+        - $ref: '#/components/parameters/ReceiptSegmentId'
+      responses:
+        '200':
+          description: Tramo eliminado y orden normalizado.
+
+  /receipt-sessions/{id}/segments/{segmentId}/image:
+    get:
+      summary: Descargar la imagen privada de un tramo
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+        - $ref: '#/components/parameters/ReceiptSegmentId'
+      responses:
+        '200':
+          description: Imagen con cache privado desactivado.
+
+  /receipt-sessions/{id}/process:
+    post:
+      summary: Procesar todos los tramos como un solo comprobante
+      description: Ejecuta OCR local, consolidación de solapes, IA condicional, reconciliación y resolución fiscal del proveedor.
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReceiptSessionId'
+      responses:
+        '200':
+          description: Sesión en PROCESSED o REVIEW_REQUIRED.
+        '409':
+          description: La sesión está procesándose o ya fue guardada.
+
   /receipts/upload:
     post:
       summary: Carga de imagen o documento de comprobante fiscal
@@ -439,7 +567,39 @@ components:
       name: X-API-Key
       description: Clave de autenticación en la cabecera `X-API-Key: eroga_live_xxxxxxxxx`
 
+  parameters:
+    ReceiptSessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    ReceiptSegmentId:
+      name: segmentId
+      in: path
+      required: true
+      schema:
+        type: string
+
   schemas:
+    ReceiptSegmentInput:
+      type: object
+      properties:
+        image_base64:
+          type: string
+          description: Imagen o PDF como data URL/base64.
+        image_url:
+          type: string
+          description: URL de imagen admitida por el motor.
+        file_name:
+          type: string
+        mime_type:
+          type: string
+          example: image/jpeg
+      anyOf:
+        - required: [image_base64]
+        - required: [image_url]
+
     ExpenseInput:
       type: object
       properties:

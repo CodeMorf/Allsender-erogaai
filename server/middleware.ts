@@ -131,6 +131,11 @@ export function validateSchema(schema: z.ZodSchema) {
  */
 export function validateFileUpload(req: Request, res: Response, next: NextFunction) {
   const { image_base64, file_size_bytes, mime_type } = req.body;
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf'];
+
+  if (mime_type && !allowedMimes.includes(mime_type)) {
+    return res.status(415).json({ error: `Formato no soportado: ${mime_type}. Use JPG, PNG, WEBP o PDF.` });
+  }
 
   if (image_base64) {
     if (image_base64.length > 35 * 1024 * 1024) { // ~25MB decoded
@@ -138,7 +143,6 @@ export function validateFileUpload(req: Request, res: Response, next: NextFuncti
     }
     if (image_base64.startsWith('data:')) {
       const detectedMime = image_base64.substring(5, image_base64.indexOf(';'));
-      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf'];
       if (!allowedMimes.includes(detectedMime)) {
         return res.status(415).json({ error: `Formato no soportado: ${detectedMime}. Use JPG, PNG, WEBP o PDF.` });
       }

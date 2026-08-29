@@ -42,7 +42,7 @@ export const SuppliersView: React.FC = () => {
       phone: '',
       email: '',
       category_default: categories[0]?.name || 'Suministros de Oficina y Papelería',
-      status_dgii: 'ACTIVO',
+      status_dgii: 'DESCONOCIDO',
       total_invoiced: 0
     });
     setIsModalOpen(true);
@@ -189,7 +189,7 @@ export const SuppliersView: React.FC = () => {
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
-                          <AlertCircle className="w-3 h-3" /> {sup.status_dgii}
+                          <AlertCircle className="w-3 h-3" /> {sup.status_dgii === 'INACTIVO' ? 'Empresa inactiva' : sup.status_dgii === 'DADO_DE_BAJA' ? 'Dado de baja' : sup.status_dgii === 'NO_LOCALIZADO' ? 'No localizado' : 'Sin verificar'}
                         </span>
                       )}
                     </td>
@@ -263,13 +263,15 @@ export const SuppliersView: React.FC = () => {
                     Estado DGII
                   </label>
                   <select
-                    value={editingSupplier.status_dgii || 'ACTIVO'}
+                    value={editingSupplier.status_dgii || 'DESCONOCIDO'}
                     onChange={(e) => setEditingSupplier({ ...editingSupplier, status_dgii: e.target.value as any })}
                     className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 dark:text-white"
                   >
                     <option value="ACTIVO">Activo</option>
-                    <option value="INACTIVO">Inactivo</option>
+                    <option value="INACTIVO">Empresa inactiva</option>
+                    <option value="DADO_DE_BAJA">Dado de baja</option>
                     <option value="NO_LOCALIZADO">No Localizado</option>
+                    <option value="DESCONOCIDO">Sin verificar</option>
                   </select>
                 </div>
               </div>

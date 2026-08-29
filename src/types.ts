@@ -88,14 +88,25 @@ export interface Supplier {
   id: string;
   organization_id: string;
   rnc: string;
+  rnc_normalized?: string;
   name: string;
   trade_name?: string;
   phone?: string;
   email?: string;
   category_default?: string;
-  status_dgii: 'ACTIVO' | 'INACTIVO' | 'NO_LOCALIZADO';
+  status_dgii: 'ACTIVO' | 'DADO_DE_BAJA' | 'INACTIVO' | 'NO_LOCALIZADO' | 'DESCONOCIDO';
+  categoria_dgii?: string;
+  regimen_de_pagos?: string;
+  actividad_economica?: string;
+  administracion_local?: string;
+  facturador_electronico?: string;
+  licencias_vhm?: string;
+  dgii_source?: string;
+  dgii_last_verified_at?: string;
+  dgii_metadata?: Record<string, unknown>;
   total_invoiced: number;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Project {
@@ -373,6 +384,12 @@ export interface LineItem {
   itbis_rate: number; // 0, 16, 18
   total: number;
   sku?: string;
+  discount?: number;
+  taxable_amount?: number;
+  itbis_amount?: number;
+  segment_index?: number;
+  confidence?: number;
+  raw_text?: string;
   cost_center_id?: string;
   project_id?: string;
 }
@@ -404,6 +421,7 @@ export interface ExpenseRecord {
   supplier_name: string;
   supplier_rnc: string;
   supplier_id?: string;
+  receipt_session_id?: string;
   ncf: string;
   ncf_type: NcfType;
   document_type: 'FACTURA_CREDITO_FISCAL' | 'FACTURA_CONSUMO' | 'TICKET_POS' | 'COMPROBANTE_ELECTRONICO' | 'RECIBO';
@@ -431,7 +449,7 @@ export interface ExpenseRecord {
   ocr_raw_text?: string;
   ai_confidence_score: number; // 0 - 100
   field_confidences?: FieldConfidences;
-  ai_provider_used: AIProviderType;
+  ai_provider_used: AIProviderType | 'TESSERACT';
   ai_model_used: string;
   line_items: LineItem[];
   created_at: string;
@@ -462,6 +480,70 @@ export interface ReceiptRecord {
     duration_ms?: number;
   };
   error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ReceiptSessionStatus = 'CAPTURING' | 'PROCESSING' | 'REVIEW_REQUIRED' | 'PROCESSED' | 'FAILED' | 'SAVED';
+export type ReceiptSegmentStatus = 'UPLOADED' | 'OCR_PROCESSING' | 'OCR_COMPLETED' | 'LOW_CONFIDENCE' | 'FAILED';
+
+export interface ReceiptSegmentRecord {
+  id: string;
+  organization_id: string;
+  receipt_session_id: string;
+  segment_index: number;
+  status: ReceiptSegmentStatus;
+  image_url?: string;
+  image_base64?: string;
+  file_name?: string;
+  mime_type: string;
+  ocr_text?: string;
+  extraction?: ReceiptExtraction;
+  confidence?: number;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceiptMathReconciliation {
+  is_valid: boolean;
+  expected_total: number;
+  calculated_total: number;
+  difference: number;
+  tolerance: number;
+  line_items_total: number;
+  discounts: number;
+  probable_segment_indexes: number[];
+}
+
+export interface SupplierResolution {
+  status: 'EXISTING' | 'CREATED' | 'PENDING_VALIDATION' | 'NOT_FOUND' | 'INVALID_RNC';
+  supplier?: Supplier;
+  dgii_status?: Supplier['status_dgii'];
+  message: string;
+}
+
+export interface ReceiptSessionRecord {
+  id: string;
+  organization_id: string;
+  status: ReceiptSessionStatus;
+  supplier_id?: string;
+  expense_id?: string;
+  extraction?: ReceiptExtraction;
+  fiscal_validation?: ValidationResult;
+  reconciliation?: ReceiptMathReconciliation;
+  supplier_resolution?: SupplierResolution;
+  meta?: {
+    provider_used?: string;
+    model_used?: string;
+    local_ocr_segments?: number;
+    ai_used?: boolean;
+    overlap_segments?: Array<{ previous_segment_index: number; current_segment_index: number; removed: number }>;
+  };
+  segments_count: number;
+  duplicates_removed: number;
+  error?: string;
+  segments: ReceiptSegmentRecord[];
   created_at: string;
   updated_at: string;
 }
@@ -542,6 +624,13 @@ export interface ReceiptExtraction {
     unit_price: number;
     itbis_rate: number;
     total: number;
+    sku?: string;
+    discount?: number;
+    taxable_amount?: number;
+    itbis_amount?: number;
+    segment_index?: number;
+    confidence?: number;
+    raw_text?: string;
   }>;
   raw_text?: string;
   observations?: string[];

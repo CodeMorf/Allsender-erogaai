@@ -20,7 +20,8 @@ import {
   forgotPasswordHandler,
   resetPasswordHandler
 } from './server/auth.ts';
-import { authMiddleware, requestIdMiddleware, AuthenticatedRequest, requirePermission } from './server/middleware.ts';
+import { authMiddleware, requestIdMiddleware, AuthenticatedRequest, requirePermission, validateFileUpload } from './server/middleware.ts';
+import { receiptSessionService } from './server/services/receipt-session.service.ts';
 import { 
   getTenantsHandler, 
   startImpersonationHandler, 
@@ -709,6 +710,60 @@ async function startServer() {
   // --------------------------------------------------
   // AI OCR & Extraction Routes
   // --------------------------------------------------
+  const receiptSessionOrgId = (req: express.Request) => (req as AuthenticatedRequest).organization_id || (req as any).organization_id;
+  const createReceiptSessionHandler = async (req: express.Request, res: express.Response) => {
+    const session = await prismaRepo.createReceiptSession(receiptSessionOrgId(req)!);
+    res.status(201).json({ success: true, data: session });
+  };
+  const getReceiptSessionHandler = async (req: express.Request, res: express.Response) => {
+    const session = await prismaRepo.getReceiptSessionById(receiptSessionOrgId(req)!, req.params.id);
+    if (!session) return res.status(404).json({ error: 'Sesión de comprobante no encontrada.', code: 'RECEIPT_SESSION_NOT_FOUND' });
+    res.json({ success: true, data: session });
+  };
+  const addReceiptSegmentHandler = async (req: express.Request, res: express.Response) => {
+    const { image_base64, image_url, file_name, mime_type } = req.body || {};
+    if (!image_base64 && !image_url) return res.status(400).json({ error: 'Se requiere image_base64 o image_url.', code: 'RECEIPT_SEGMENT_IMAGE_REQUIRED' });
+    const session = await prismaRepo.addReceiptSegment(receiptSessionOrgId(req)!, req.params.id, { image_base64, image_url, file_name, mime_type });
+    res.status(201).json({ success: true, data: session });
+  };
+  const replaceReceiptSegmentHandler = async (req: express.Request, res: express.Response) => {
+    const { image_base64, image_url, file_name, mime_type } = req.body || {};
+    if (!image_base64 && !image_url) return res.status(400).json({ error: 'Se requiere una imagen de reemplazo.', code: 'RECEIPT_SEGMENT_IMAGE_REQUIRED' });
+    const segment = await prismaRepo.replaceReceiptSegment(receiptSessionOrgId(req)!, req.params.id, req.params.segmentId, { image_base64, image_url, file_name, mime_type });
+    res.json({ success: true, data: segment });
+  };
+  const deleteReceiptSegmentHandler = async (req: express.Request, res: express.Response) => {
+    const session = await prismaRepo.deleteReceiptSegment(receiptSessionOrgId(req)!, req.params.id, req.params.segmentId);
+    res.json({ success: true, data: session });
+  };
+  const reorderReceiptSegmentsHandler = async (req: express.Request, res: express.Response) => {
+    if (!Array.isArray(req.body?.segment_ids)) return res.status(400).json({ error: 'segment_ids debe ser una lista ordenada.', code: 'RECEIPT_SEGMENT_ORDER_REQUIRED' });
+    const session = await prismaRepo.reorderReceiptSegments(receiptSessionOrgId(req)!, req.params.id, req.body.segment_ids);
+    res.json({ success: true, data: session });
+  };
+  const processReceiptSessionHandler = async (req: express.Request, res: express.Response) => {
+    const session = await receiptSessionService.process(receiptSessionOrgId(req)!, req.params.id);
+    res.json({ success: true, data: session });
+  };
+  const getReceiptSegmentImageHandler = async (req: express.Request, res: express.Response) => {
+    const segment = await prismaRepo.getReceiptSegmentById(receiptSessionOrgId(req)!, req.params.id, req.params.segmentId, true);
+    if (!segment?.image_base64) return res.status(404).json({ error: 'Imagen del segmento no encontrada.', code: 'RECEIPT_SEGMENT_IMAGE_NOT_FOUND' });
+    const match = segment.image_base64.match(/^data:([^;]+);base64,([\s\S]+)$/);
+    const encoded = match ? match[2] : segment.image_base64;
+    const mimeType = match?.[1] || segment.mime_type || 'image/jpeg';
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.type(mimeType).send(Buffer.from(encoded, 'base64'));
+  };
+
+  app.post('/api/receipt-sessions', requirePermission('expenses.create_ocr'), asyncRoute(createReceiptSessionHandler));
+  app.get('/api/receipt-sessions/:id', requirePermission('expenses.create_ocr'), asyncRoute(getReceiptSessionHandler));
+  app.post('/api/receipt-sessions/:id/segments', requirePermission('expenses.create_ocr'), validateFileUpload, asyncRoute(addReceiptSegmentHandler));
+  app.put('/api/receipt-sessions/:id/segments/:segmentId', requirePermission('expenses.create_ocr'), validateFileUpload, asyncRoute(replaceReceiptSegmentHandler));
+  app.delete('/api/receipt-sessions/:id/segments/:segmentId', requirePermission('expenses.create_ocr'), asyncRoute(deleteReceiptSegmentHandler));
+  app.patch('/api/receipt-sessions/:id/segments/reorder', requirePermission('expenses.create_ocr'), asyncRoute(reorderReceiptSegmentsHandler));
+  app.get('/api/receipt-sessions/:id/segments/:segmentId/image', requirePermission('expenses.create_ocr'), asyncRoute(getReceiptSegmentImageHandler));
+  app.post('/api/receipt-sessions/:id/process', requirePermission('expenses.create_ocr'), asyncRoute(processReceiptSessionHandler));
+
   const handleOCRExtraction = async (req: express.Request, res: express.Response) => {
     let receiptId: string | undefined;
     try {
@@ -1100,6 +1155,16 @@ async function startServer() {
       data: await prismaRepo.getCostCenters(orgId)
     });
   }));
+
+  // Multi-segment receipt sessions share the same service as Web/PWA/Capacitor.
+  app.post('/api/v1/receipt-sessions', apiKeyAuthMiddleware('ocr:process'), asyncRoute(createReceiptSessionHandler));
+  app.get('/api/v1/receipt-sessions/:id', apiKeyAuthMiddleware('ocr:process'), asyncRoute(getReceiptSessionHandler));
+  app.post('/api/v1/receipt-sessions/:id/segments', apiKeyAuthMiddleware('ocr:process'), validateFileUpload, asyncRoute(addReceiptSegmentHandler));
+  app.put('/api/v1/receipt-sessions/:id/segments/:segmentId', apiKeyAuthMiddleware('ocr:process'), validateFileUpload, asyncRoute(replaceReceiptSegmentHandler));
+  app.delete('/api/v1/receipt-sessions/:id/segments/:segmentId', apiKeyAuthMiddleware('ocr:process'), asyncRoute(deleteReceiptSegmentHandler));
+  app.patch('/api/v1/receipt-sessions/:id/segments/reorder', apiKeyAuthMiddleware('ocr:process'), asyncRoute(reorderReceiptSegmentsHandler));
+  app.get('/api/v1/receipt-sessions/:id/segments/:segmentId/image', apiKeyAuthMiddleware('ocr:process'), asyncRoute(getReceiptSegmentImageHandler));
+  app.post('/api/v1/receipt-sessions/:id/process', apiKeyAuthMiddleware('ocr:process'), asyncRoute(processReceiptSessionHandler));
 
   // 3. Receipts Lifecycle (Upload -> Process OCR -> Query)
   app.post('/api/v1/receipts/upload', apiKeyAuthMiddleware('ocr:process'), asyncRoute(async (req, res) => {

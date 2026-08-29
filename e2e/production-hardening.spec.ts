@@ -56,6 +56,41 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     expect(tenantBRegistration.status()).toBe(201);
     const tenantB = await tenantBRegistration.json();
 
+    // Multi-segment receipts are persisted in SQL and every route is tenant-scoped.
+    const receiptSessionResponse = await tenantAContext.post('/api/receipt-sessions');
+    expect(receiptSessionResponse.status()).toBe(201);
+    const receiptSession = (await receiptSessionResponse.json()).data;
+    const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const firstSegmentResponse = await tenantAContext.post(`/api/receipt-sessions/${receiptSession.id}/segments`, {
+      data: { image_base64: tinyPng, file_name: 'tramo-1.png', mime_type: 'image/png', organization_id: tenantB.organization.id }
+    });
+    expect(firstSegmentResponse.status()).toBe(201);
+    const firstSegmentSession = (await firstSegmentResponse.json()).data;
+    expect(firstSegmentSession.segments).toHaveLength(1);
+    const firstSegmentId = firstSegmentSession.segments[0].id;
+    expect((await tenantAContext.post(`/api/receipt-sessions/${receiptSession.id}/segments`, { data: { image_base64: tinyPng, file_name: 'tramo-2.png', mime_type: 'image/png' } })).status()).toBe(201);
+    for (let index = 3; index <= 20; index += 1) {
+      expect((await tenantAContext.post(`/api/receipt-sessions/${receiptSession.id}/segments`, { data: { image_base64: tinyPng, file_name: `tramo-${index}.png`, mime_type: 'image/png' } })).status()).toBe(201);
+    }
+    const overLimitSegment = await tenantAContext.post(`/api/receipt-sessions/${receiptSession.id}/segments`, { data: { image_base64: tinyPng, file_name: 'tramo-21.png', mime_type: 'image/png' } });
+    expect(overLimitSegment.status()).toBe(422);
+    expect((await overLimitSegment.json()).code).toBe('RECEIPT_SEGMENT_LIMIT');
+    expect((await prisma.receiptSession.findUnique({ where: { id: receiptSession.id } }))?.organization_id).toBe(tenantA.organization.id);
+    expect(await prisma.receiptSegment.count({ where: { receipt_session_id: receiptSession.id, organization_id: tenantA.organization.id } })).toBe(20);
+    expect((await tenantBContext.get(`/api/receipt-sessions/${receiptSession.id}`)).status()).toBe(404);
+    expect((await tenantBContext.delete(`/api/receipt-sessions/${receiptSession.id}/segments/${firstSegmentId}`)).status()).toBe(404);
+    const prematureApproval = await tenantAContext.post('/api/expenses', {
+      data: { receipt_session_id: receiptSession.id, supplier_name: 'No aprobar', supplier_rnc: '101001577', ncf: 'B0100000199', subtotal: 1, itbis_amount: 0, total_amount: 1, status: 'APROBADO', date: new Date().toISOString().slice(0, 10) }
+    });
+    expect(prematureApproval.status()).toBe(422);
+    expect((await prematureApproval.json()).code).toBe('EXPENSE_RECEIPT_REVIEW_REQUIRED');
+
+    // The same normalized RNC is valid in separate tenants, but not twice in one tenant.
+    const tenantSupplierA = await prisma.supplier.create({ data: { id: `supplier_a_${crypto.randomBytes(5).toString('hex')}`, organization_id: tenantA.organization.id, rnc: '101-00157-7', rnc_normalized: '101001577', name: 'Proveedor Fiscal A', status_dgii: 'ACTIVO' } });
+    await expect(prisma.supplier.create({ data: { id: `supplier_a_dup_${crypto.randomBytes(5).toString('hex')}`, organization_id: tenantA.organization.id, rnc: '101001577', rnc_normalized: '101001577', name: 'Duplicado', status_dgii: 'ACTIVO' } })).rejects.toMatchObject({ code: 'P2002' });
+    const tenantSupplierB = await prisma.supplier.create({ data: { id: `supplier_b_${crypto.randomBytes(5).toString('hex')}`, organization_id: tenantB.organization.id, rnc: '101001577', rnc_normalized: '101001577', name: 'Proveedor Fiscal B', status_dgii: 'ACTIVO' } });
+    expect(tenantSupplierA.organization_id).not.toBe(tenantSupplierB.organization_id);
+
     const expenseResponse = await tenantAContext.post('/api/expenses', {
       data: { supplier_name: 'Proveedor A', supplier_rnc: '101-00000-1', ncf: 'B0100000101', subtotal: 100, itbis_amount: 18, total_amount: 118, date: new Date().toISOString().slice(0, 10) }
     });
@@ -102,6 +137,15 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     expect(scopedRead.status()).toBe(200);
     const deniedWrite = await apiContext.post('/api/v1/expenses', { headers: { Authorization: `Bearer ${rawApiKey}` }, data: { ncf: 'B0100000102' } });
     expect(deniedWrite.status()).toBe(401);
+
+    const apiReceiptSessionResponse = await apiContext.post('/api/v1/receipt-sessions', { headers: { Authorization: `Bearer ${rawApiKey}` } });
+    expect(apiReceiptSessionResponse.status()).toBe(201);
+    const apiReceiptSession = (await apiReceiptSessionResponse.json()).data;
+    expect((await apiContext.post(`/api/v1/receipt-sessions/${apiReceiptSession.id}/segments`, {
+      headers: { Authorization: `Bearer ${rawApiKey}` },
+      data: { image_base64: tinyPng, file_name: 'api-tramo.png', mime_type: 'image/png' }
+    })).status()).toBe(201);
+    expect((await prisma.receiptSession.findUnique({ where: { id: apiReceiptSession.id } }))?.organization_id).toBe(tenantA.organization.id);
 
     const receiptUpload = await apiContext.post('/api/v1/receipts/upload', {
       headers: { Authorization: `Bearer ${rawApiKey}` },
@@ -190,6 +234,9 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
         expect((await afterRestart.get('/api/ai/providers')).status()).toBe(200);
         expect((await afterRestart.get('/api/erp/config')).status()).toBe(200);
         expect((await afterRestart.get('/api/categories')).status()).toBe(200);
+        const restartedReceiptSession = await afterRestart.get(`/api/receipt-sessions/${receiptSession.id}`);
+        expect(restartedReceiptSession.status()).toBe(200);
+        expect((await restartedReceiptSession.json()).data.segments).toHaveLength(20);
       } finally {
         await afterRestart.dispose();
       }

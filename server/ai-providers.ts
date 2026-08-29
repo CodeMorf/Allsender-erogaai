@@ -2,6 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { parseReceiptLineItems } from './services/receipt-line-parser.service.ts';
 import { 
   AIProviderType, 
   ReceiptExtraction, 
@@ -12,6 +13,7 @@ import {
   NcfType
 } from '../src/types.ts';
 import { prismaRepo } from './database/prisma.repository.ts';
+import { validateDominicanRnc } from '../src/utils/fiscalValidators.ts';
 
 export interface ReceiptImage {
   base64Data: string;
@@ -39,6 +41,7 @@ export interface AIProvider {
   providerType: AIProviderType;
   testConnection(): Promise<AITestResult>;
   extractReceiptData(image: ReceiptImage): Promise<ReceiptExtraction>;
+  extractReceiptSessionData?(images: ReceiptImage[]): Promise<ReceiptExtraction>;
   classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion>;
   validateExtraction(data: ReceiptData): Promise<ValidationResult>;
   getUsage(): Promise<AIUsage>;
@@ -59,9 +62,12 @@ export function validateFiscalData(data: ReceiptData): ValidationResult {
   if (!cleanRnc) {
     warnings.push('No se detectó RNC del proveedor en el comprobante.');
     rnc_valid = false;
-  } else if (cleanRnc.length !== 9 && cleanRnc.length !== 11) {
-    errors.push(`RNC inválido (${cleanRnc}): Debe contener 9 dígitos para empresas o 11 para personas físicas.`);
-    rnc_valid = false;
+  } else {
+    const identifierValidation = validateDominicanRnc(cleanRnc);
+    if (!identifierValidation.isValid) {
+      errors.push(`RNC o cédula inválido (${cleanRnc}): ${identifierValidation.message || 'dígito verificador incorrecto'}.`);
+      rnc_valid = false;
+    }
   }
 
   // Clean NCF
@@ -91,6 +97,42 @@ export function validateFiscalData(data: ReceiptData): ValidationResult {
     warnings,
     errors
   };
+}
+
+const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. Responde únicamente JSON válido.`;
+
+function imageAsDataUrl(image: ReceiptImage): string {
+  return image.base64Data.startsWith('data:')
+    ? image.base64Data
+    : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
+}
+
+async function extractOpenAICompatibleSession(input: {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  images: ReceiptImage[];
+}): Promise<{ extraction: ReceiptExtraction; usage: any }> {
+  const content = [
+    { type: 'text', text: MULTI_SEGMENT_PROMPT },
+    ...input.images.map(image => ({
+      type: 'image_url',
+      image_url: { url: imageAsDataUrl(image) }
+    }))
+  ];
+  const response = await fetch(input.endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` },
+    body: JSON.stringify({
+      model: input.model,
+      messages: [{ role: 'user', content }],
+      response_format: { type: 'json_object' }
+    })
+  });
+  if (!response.ok) throw new Error(`Proveedor de visión respondió con HTTP ${response.status}`);
+  const body = await response.json();
+  const parsed = JSON.parse(body.choices?.[0]?.message?.content || '{}') as ReceiptExtraction;
+  return { extraction: parsed, usage: body.usage || {} };
 }
 
 // ----------------------------------------------------
@@ -160,7 +202,7 @@ const normalizeReceiptDate = (rawValue?: string): string => {
   return new Date().toISOString().split('T')[0];
 };
 
-export function parseLocalOCRText(rawText: string, confidence: number = 0): ReceiptExtraction {
+export function parseLocalOCRText(rawText: string, confidence: number = 0, segmentIndex = 0): ReceiptExtraction {
   const lines = rawText
     .split(/\r?\n/)
     .map(line => line.replace(/\s+/g, ' ').trim())
@@ -190,7 +232,16 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0): Rece
   const ncfType = supportedNcfTypes.includes(detectedNcfType as NcfType)
     ? detectedNcfType as NcfType
     : 'B01';
-  const safeConfidence = Math.max(10, Math.min(70, Math.round(confidence || 35)));
+  const lineItems = parseReceiptLineItems(rawText, segmentIndex);
+  const structuralScore = Math.min(100,
+    (supplierName ? 10 : 0)
+    + (rncMatch ? 20 : 0)
+    + (ncfMatch ? 20 : 0)
+    + (totalAmount > 0 ? 20 : 0)
+    + (lineItems.length > 0 ? 25 : 0)
+    + (/\bFECHA\b/i.test(normalizedText) ? 5 : 0)
+  );
+  const safeConfidence = Math.max(10, Math.min(92, Math.round((confidence || 35) * 0.45 + structuralScore * 0.55)));
 
   return {
     supplier_name: supplierName,
@@ -210,16 +261,16 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0): Rece
     suggested_classification: 'GASTO_OPERATIVO',
     suggested_category: 'Gastos Generales',
     confidence_score: safeConfidence,
-    line_items: [],
+    line_items: lineItems,
     raw_text: rawText,
     observations: [
-      'Extraído con OCR local gratuito (Tesseract.js) porque la IA no estaba disponible.',
+      'Extraído con OCR local gratuito (Tesseract.js).',
       'Revise RNC, NCF y montos antes de aprobar el comprobante.'
     ]
   };
 }
 
-async function extractWithLocalOCR(image: ReceiptImage): Promise<ReceiptExtraction> {
+export async function extractWithLocalOCR(image: ReceiptImage, segmentIndex = 0): Promise<ReceiptExtraction> {
   if (/pdf/i.test(image.mimeType)) {
     throw new Error('El OCR local admite imágenes JPG, PNG o WEBP; los PDF requieren un proveedor de IA activo.');
   }
@@ -227,7 +278,7 @@ async function extractWithLocalOCR(image: ReceiptImage): Promise<ReceiptExtracti
   const task = localOCRQueue.then(async () => {
     const worker = await getLocalOCRWorker();
     const result = await worker.recognize(image.base64Data);
-    return parseLocalOCRText(result.data.text || '', result.data.confidence || 0);
+    return parseLocalOCRText(result.data.text || '', result.data.confidence || 0, segmentIndex);
   });
 
   localOCRQueue = task.then(() => undefined, () => undefined);
@@ -379,6 +430,39 @@ export class GeminiAIProvider implements AIProvider {
     }
   }
 
+  async extractReceiptSessionData(images: ReceiptImage[]): Promise<ReceiptExtraction> {
+    const startTime = Date.now();
+    if (!this.apiKey) throw new Error('No existe una API Key de Gemini configurada para la organización.');
+    if (images.length === 0) throw new Error('La sesión no contiene imágenes.');
+    try {
+      const ai = new GoogleGenAI({ apiKey: this.apiKey });
+      const parts: any[] = [{ text: MULTI_SEGMENT_PROMPT }];
+      for (const image of images) {
+        parts.push({ inlineData: { data: image.base64Data.replace(/^data:[^;]+;base64,/, ''), mimeType: image.mimeType || 'image/jpeg' } });
+      }
+      const response = await ai.models.generateContent({
+        model: this.model,
+        contents: [{ role: 'user', parts }],
+        config: { responseMimeType: 'application/json' }
+      });
+      const extraction = JSON.parse(response.text) as ReceiptExtraction;
+      await prismaRepo.logAIUsage({
+        organization_id: this.orgId,
+        provider_type: 'GEMINI',
+        model: this.model,
+        action: 'EXTRACT_RECEIPT',
+        tokens_prompt: 1500 * images.length,
+        tokens_completion: 800,
+        duration_ms: Date.now() - startTime,
+        status: 'SUCCESS'
+      });
+      return extraction;
+    } catch (error) {
+      await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GEMINI', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: 0, tokens_completion: 0, duration_ms: Date.now() - startTime, status: 'ERROR' });
+      throw error;
+    }
+  }
+
   async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
     return {
       classification: 'GASTO_OPERATIVO',
@@ -506,6 +590,28 @@ export class GroqAIProvider implements AIProvider {
     }
   }
 
+  async extractReceiptSessionData(images: ReceiptImage[]): Promise<ReceiptExtraction> {
+    const startTime = Date.now();
+    if (!this.apiKey) throw new Error('API Key de Groq no configurada.');
+    try {
+      const result = await extractOpenAICompatibleSession({ endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: this.apiKey, model: this.model, images });
+      await prismaRepo.logAIUsage({
+        organization_id: this.orgId,
+        provider_type: 'GROQ',
+        model: this.model,
+        action: 'EXTRACT_RECEIPT',
+        tokens_prompt: result.usage.prompt_tokens || 800 * images.length,
+        tokens_completion: result.usage.completion_tokens || 400,
+        duration_ms: Date.now() - startTime,
+        status: 'SUCCESS'
+      });
+      return result.extraction;
+    } catch (error) {
+      await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GROQ', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: 0, tokens_completion: 0, duration_ms: Date.now() - startTime, status: 'ERROR' });
+      throw error;
+    }
+  }
+
   async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
     return {
       classification: 'GASTO_OPERATIVO',
@@ -622,6 +728,28 @@ export class OpenAIProvider implements AIProvider {
         duration_ms: Date.now() - startTime,
         status: 'ERROR'
       });
+      throw error;
+    }
+  }
+
+  async extractReceiptSessionData(images: ReceiptImage[]): Promise<ReceiptExtraction> {
+    const startTime = Date.now();
+    if (!this.apiKey) throw new Error('API Key de OpenAI no configurada.');
+    try {
+      const result = await extractOpenAICompatibleSession({ endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: this.apiKey, model: this.model, images });
+      await prismaRepo.logAIUsage({
+        organization_id: this.orgId,
+        provider_type: 'OPENAI',
+        model: this.model,
+        action: 'EXTRACT_RECEIPT',
+        tokens_prompt: result.usage.prompt_tokens || 1200 * images.length,
+        tokens_completion: result.usage.completion_tokens || 600,
+        duration_ms: Date.now() - startTime,
+        status: 'SUCCESS'
+      });
+      return result.extraction;
+    } catch (error) {
+      await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'OPENAI', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: 0, tokens_completion: 0, duration_ms: Date.now() - startTime, status: 'ERROR' });
       throw error;
     }
   }
@@ -802,12 +930,66 @@ export async function getAIProviderInstance(orgId: string, preferredType?: AIPro
   }
 }
 
+export async function extractReceiptSessionWithAI(
+  orgId: string,
+  images: ReceiptImage[]
+): Promise<{ extraction: ReceiptExtraction; providerUsed: AIProviderType; modelUsed: string } | null> {
+  const configs = (await prismaRepo.getAIProviderConfigs(orgId))
+    .filter(config => config.is_active && config.has_key)
+    .sort((left, right) => Number(right.is_primary) - Number(left.is_primary));
+
+  for (const config of configs) {
+    const provider = await getAIProviderInstance(orgId, config.provider_type);
+    if (!provider.extractReceiptSessionData) continue;
+    try {
+      const extraction = await provider.extractReceiptSessionData(images);
+      return { extraction, providerUsed: config.provider_type, modelUsed: config.selected_model };
+    } catch (error: any) {
+      console.warn(`[AI Session Chain] Engine ${config.provider_type} failed: ${error.message}. Trying next provider...`);
+    }
+  }
+
+  if (configs.length === 0 && process.env.GEMINI_API_KEY) {
+    try {
+      const provider = new GeminiAIProvider(process.env.GEMINI_API_KEY, 'gemini-2.5-flash', orgId);
+      const extraction = await provider.extractReceiptSessionData(images);
+      return { extraction, providerUsed: 'GEMINI', modelUsed: 'gemini-2.5-flash' };
+    } catch (error: any) {
+      console.warn(`[AI Session Chain] Environment Gemini failed: ${error.message}. Keeping local OCR result.`);
+    }
+  }
+
+  return null;
+}
+
 /**
  * Executes Receipt Extraction with Real Fallback Chain Across Active Providers
  */
-export async function extractWithFallback(orgId: string, image: ReceiptImage): Promise<{ extraction: ReceiptExtraction; providerUsed: OCRProviderUsed; modelUsed: string }> {
-  const configs = (await prismaRepo.getAIProviderConfigs(orgId)).filter(c => c.is_active && c.has_key);
+export async function extractWithFallback(
+  orgId: string,
+  image: ReceiptImage,
+  options: { segmentIndex?: number; localConfidenceThreshold?: number } = {}
+): Promise<{ extraction: ReceiptExtraction; providerUsed: OCRProviderUsed; modelUsed: string }> {
+  const segmentIndex = options.segmentIndex || 0;
+  const localThreshold = options.localConfidenceThreshold || Number(process.env.LOCAL_OCR_CONFIDENCE_THRESHOLD || 78);
+  let localExtraction: ReceiptExtraction | null = null;
+  let localFailure: Error | null = null;
 
+  // Images are read locally first. Paid providers are used only when local OCR
+  // does not produce a sufficiently reliable structured result.
+  if (!/pdf/i.test(image.mimeType)) {
+    try {
+      localExtraction = await extractWithLocalOCR(image, segmentIndex);
+      const usefulStructure = localExtraction.total_amount > 0 && localExtraction.line_items.length > 0;
+      if (usefulStructure && localExtraction.confidence_score >= localThreshold) {
+        return { extraction: localExtraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
+      }
+    } catch (error: any) {
+      localFailure = error;
+    }
+  }
+
+  const configs = (await prismaRepo.getAIProviderConfigs(orgId)).filter(c => c.is_active && c.has_key);
   if (configs.length === 0) {
     const environmentGeminiKey = process.env.GEMINI_API_KEY || '';
     if (environmentGeminiKey) {
@@ -816,33 +998,34 @@ export async function extractWithFallback(orgId: string, image: ReceiptImage): P
         const extraction = await defaultGemini.extractReceiptData(image);
         return { extraction, providerUsed: 'GEMINI', modelUsed: 'gemini-2.5-flash' };
       } catch (error: any) {
-        console.warn(`[AI Chain] Environment Gemini failed: ${error.message}. Using local OCR fallback...`);
+        console.warn(`[AI Chain] Environment Gemini failed: ${error.message}. Using local OCR result...`);
       }
     }
-
-    const extraction = await extractWithLocalOCR(image);
+    if (localExtraction) return { extraction: localExtraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
+    if (localFailure) throw localFailure;
+    const extraction = await extractWithLocalOCR(image, segmentIndex);
     return { extraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
   }
 
-  // Sort: Primary first, then Fallback
   const sorted = [...configs].sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
   let lastError: Error | null = null;
-
   for (const cfg of sorted) {
     try {
       const instance = await getAIProviderInstance(orgId, cfg.provider_type);
       const extraction = await instance.extractReceiptData(image);
+      extraction.line_items = (extraction.line_items || []).map(item => ({ ...item, segment_index: segmentIndex }));
       return { extraction, providerUsed: cfg.provider_type, modelUsed: cfg.selected_model };
-    } catch (err: any) {
-      console.warn(`[AI Chain] Engine ${cfg.provider_type} failed: ${err.message}. Trying next fallback...`);
-      lastError = err;
+    } catch (error: any) {
+      console.warn(`[AI Chain] Engine ${cfg.provider_type} failed: ${error.message}. Trying next fallback...`);
+      lastError = error;
     }
   }
 
+  if (localExtraction) return { extraction: localExtraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
   try {
-    const extraction = await extractWithLocalOCR(image);
+    const extraction = await extractWithLocalOCR(image, segmentIndex);
     return { extraction, providerUsed: 'TESSERACT', modelUsed: 'tesseract.js-7-spa+eng' };
-  } catch (localError: any) {
-    throw new Error(`Todos los motores de IA y el OCR local fallaron: ${lastError?.message || localError?.message || 'Error de credencial u OCR'}`);
+  } catch (finalLocalError: any) {
+    throw new Error(`Todos los motores de IA y el OCR local fallaron: ${lastError?.message || localFailure?.message || finalLocalError?.message || 'Error de credencial u OCR'}`);
   }
 }

@@ -5,7 +5,7 @@ describe('AI & Fiscal Validation Rules', () => {
   it('validates Dominican RNC formats correctly', () => {
     const validResult = validateFiscalData({
       supplier_name: 'Test SRL',
-      supplier_rnc: '131-89241-2',
+      supplier_rnc: '101-00157-7',
       ncf: 'B0100000001',
       subtotal: 1000,
       itbis_amount: 180,
@@ -57,7 +57,7 @@ describe('AI & Fiscal Validation Rules', () => {
     expect(result.subtotal).toBe(1000);
     expect(result.itbis_amount).toBe(180);
     expect(result.total_amount).toBe(1180);
-    expect(result.confidence_score).toBe(70);
+    expect(result.confidence_score).toBe(78);
     expect(result.observations?.[0]).toContain('Tesseract.js');
   });
 });

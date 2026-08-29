@@ -135,4 +135,32 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
     });
     expect(invalidReset.status()).toBe(400);
   });
+
+  test('web scanner keeps multiple photos in one receipt session before processing', async ({ page }) => {
+    const email = `scanner_${Date.now()}@example.com`;
+    const password = `Scanner_${crypto.randomBytes(24).toString('hex')}`;
+    const registration = await page.request.post('/api/auth/register', {
+      data: { email, password, name: 'Scanner E2E', company_name: 'Empresa Scanner E2E', rnc: '101-00157-7' }
+    });
+    expect(registration.status()).toBe(201);
+    expect((await page.request.post('/api/organization/onboarding/complete')).status()).toBe(200);
+
+    await page.goto('/company/dashboard');
+    const scanButton = page.getByRole('button', { name: /Escanear Factura Ahora|Escanear Primer Comprobante Ahora|Escanear Comprobante/i }).first();
+    await expect(scanButton).toBeVisible();
+    await scanButton.click();
+    await expect(page.getByText('Capturar o Escanear Comprobante Fiscal')).toBeVisible();
+
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+    await page.locator('input[type="file"]').first().setInputFiles({ name: 'tramo-1.png', mimeType: 'image/png', buffer: png });
+    await expect(page.getByText('Comprobante largo: 1 de 20 tramos')).toBeVisible();
+    await expect(page.getByText('Tramo 1', { exact: true }).first()).toBeVisible();
+
+    await page.locator('input[type="file"]').first().setInputFiles({ name: 'tramo-2.png', mimeType: 'image/png', buffer: png });
+    await expect(page.getByText('Comprobante largo: 2 de 20 tramos')).toBeVisible();
+    await expect(page.getByText('Tramo 2', { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Repetir foto' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Eliminar tramo' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /Finalizar y procesar/i })).toBeVisible();
+  });
 });
