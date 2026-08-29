@@ -26,7 +26,7 @@ Diseñado e impulsado por **[CodeMorf Tech](https://codemorf.tech/)**, este sist
 
 ## ✨ Características Principales
 
-- 🧾 **Escaner OCR Inteligente con IA**: Extracción automática de NCF, RNC, fecha, subtotal, ITBIS y renglones de consumo utilizando Google Gemini.
+- 🧾 **Escáner inteligente de comprobantes**: Captura desde cámara o archivo y extracción automática de NCF, RNC, fecha, subtotal, ITBIS y total. Usa los proveedores de IA configurados y dispone de Tesseract OCR local gratuito como respaldo para imágenes.
 - 🇩🇴 **Cumplimiento Fiscal DGII 606**: Validación de RNC/Cédula, NCF B01/B02/B14/B15/E31/E32 y exportación directa del reporte 606.
 - 🏢 **Arquitectura Multi-Empresa & Multi-Sede**: Control centralizado para Holdings, sucursales y proyectos con control de acceso basado en roles (RBAC).
 - 🔄 **Integración ERP Flex & API REST**: Sincronización automática de gastos contables con sistemas ERP externos mediante API Keys y Webhooks.
@@ -48,8 +48,12 @@ Este proyecto ha sido concebido, diseñado e implementado por **CodeMorf**:
 
 - **Frontend**: React 19, TypeScript, Vite 6, TailwindCSS v4, Lucide Icons, Recharts, Motion.
 - **Backend / API**: Node.js, Express, TSX, Esbuild.
-- **IA / OCR**: `@google/genai` (Gemini API).
+- **IA / OCR**: Google Gemini, Groq, OpenAI, CodeMorf Cloud y `tesseract.js` como respaldo OCR local en español e inglés.
 - **Móvil / Cross-Platform**: Capacitor TS, Service Worker PWA.
+
+### Documentación del escáner
+
+La arquitectura de cámara, la cadena de proveedores, el respaldo OCR gratuito, los formatos compatibles y la guía de diagnóstico están documentados en [docs/RECEIPT_SCANNER.md](docs/RECEIPT_SCANNER.md).
 
 ---
 

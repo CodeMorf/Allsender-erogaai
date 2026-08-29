@@ -15,9 +15,19 @@
 4. **CodeMorf Cloud**:
    - Cloud integration status check and telemetry.
 
+5. **Tesseract.js (local free fallback)**:
+   - Runs on the ErogaAI server without an external AI API key.
+   - Uses the Spanish and English language models (`spa` + `eng`).
+   - Supports JPG, PNG and WEBP images. PDF extraction still requires an active AI provider.
+   - Returns a conservative confidence score and requires the operator to review fiscal fields before approval.
+
 ## Fallback Execution Chain
 
-If a primary provider fails due to timeout or rate limit, the server automatically attempts real extraction with secondary active providers configured for the organization. If all providers fail, a clean error is returned. **No fake bills or mock data are ever generated.**
+If a primary provider fails due to timeout, invalid credentials, rate limiting or provider availability, the server automatically attempts extraction with the secondary active providers configured for the organization. If none succeeds, the server uses Tesseract.js for supported image formats. If the local OCR also fails, a clean error is returned. **No fake bills or mock data are ever generated.**
+
+The local OCR worker is reused between requests and its work is serialized to avoid concurrent access to the same worker. Trained language data is cached in `TESSERACT_CACHE_PATH` or, by default, `data/tesseract`.
+
+The complete scanner flow and operational checks are documented in [RECEIPT_SCANNER.md](RECEIPT_SCANNER.md).
 
 ## AI Provider Status Testing
 
