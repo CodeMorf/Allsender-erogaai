@@ -22,17 +22,21 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules')) {
-              if (id.includes('recharts')) return 'vendor-charts';
-              if (id.includes('lucide-react')) return 'vendor-icons';
-              if (id.includes('react-router')) return 'vendor-router';
-              if (id.includes('react-dom') || id.includes(`${path.sep}react${path.sep}`)) return 'vendor-react';
-              return 'vendor';
+            const normalizedId = id.replaceAll('\\', '/');
+            if (normalizedId.includes('/node_modules/')) {
+              if (normalizedId.includes('/node_modules/recharts/')) return 'vendor-charts';
+              if (normalizedId.includes('/node_modules/lucide-react/')) return 'vendor-icons';
+              if (normalizedId.includes('/node_modules/react-router')) return 'vendor-router';
+              if (
+                normalizedId.includes('/node_modules/react/') ||
+                normalizedId.includes('/node_modules/react-dom/') ||
+                normalizedId.includes('/node_modules/scheduler/')
+              ) return 'vendor-react';
             }
 
-            if (id.includes(`${path.sep}src${path.sep}views${path.sep}ApiDocsView`)) return 'view-api-docs';
-            if (id.includes(`${path.sep}src${path.sep}views${path.sep}AIConfigurationView`)) return 'view-ai-config';
-            if (id.includes(`${path.sep}src${path.sep}views${path.sep}SuperAdminView`)) return 'view-super-admin';
+            if (normalizedId.includes('/src/views/ApiDocsView')) return 'view-api-docs';
+            if (normalizedId.includes('/src/views/AIConfigurationView')) return 'view-ai-config';
+            if (normalizedId.includes('/src/views/SuperAdminView')) return 'view-super-admin';
             return undefined;
           },
         },
