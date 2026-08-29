@@ -1,5 +1,7 @@
-// ErogaAI PWA Service Worker v1.0.0
-const CACHE_NAME = 'eroga-ai-cache-v1';
+// ErogaAI PWA Service Worker v1.1.0
+// Bump this when the app shell changes so installed/open clients do not keep
+// serving an old camera bundle from the previous cache.
+const CACHE_NAME = 'eroga-ai-cache-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -73,6 +75,24 @@ self.addEventListener('fetch', (event) => {
             status: 200
           });
         })
+    );
+    return;
+  }
+
+  // Always refresh the app shell and service worker when online. The previous
+  // stale-while-revalidate strategy could keep an old bundle active while the
+  // camera fix was already deployed.
+  if (request.mode === 'navigate' || url.pathname === '/index.html' || url.pathname === '/sw.js') {
+    event.respondWith(
+      fetch(request, { cache: 'no-store' })
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200 && url.pathname !== '/sw.js') {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }

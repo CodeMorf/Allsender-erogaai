@@ -42,6 +42,7 @@ interface PWAContextType {
 const PWAContext = createContext<PWAContextType | undefined>(undefined);
 
 const OFFLINE_DRAFTS_STORAGE_KEY = 'eroga_offline_drafts_v1';
+const SERVICE_WORKER_VERSION = '1.1.0';
 
 export const PWAProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -79,7 +80,7 @@ export const PWAProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Register Service Worker
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
+      navigator.serviceWorker.register(`/sw.js?v=${SERVICE_WORKER_VERSION}`)
         .then((reg) => {
           setSwRegistration(reg);
           setServiceWorkerActive(true);

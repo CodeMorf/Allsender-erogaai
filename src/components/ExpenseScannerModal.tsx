@@ -112,14 +112,38 @@ export const ExpenseScannerModal: React.FC = () => {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
+      // Prefer the rear camera on phones, but do not force that constraint on
+      // desktop browsers where it can select an unavailable/black device.
+      const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+      const preferredConstraints: MediaStreamConstraints = {
+        audio: false,
+        video: isMobileDevice
+          ? { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 } }
+      };
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(preferredConstraints);
+      } catch (error: any) {
+        // A camera may reject the preferred constraint even though another
+        // usable camera is available. Retry only for device/constraint errors;
+        // permission failures must remain visible to the user.
+        if (!['NotFoundError', 'OverconstrainedError'].includes(error?.name)) {
+          throw error;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
       setCameraStream(stream);
       setStep('CAMERA_ACTIVE');
     } catch (err: any) {
       console.error('Camera error:', err);
-      setCameraError('No se pudo acceder a la cámara. Por favor autoriza los permisos o sube una imagen.');
+      const message = err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
+        ? 'Permite el acceso a la cámara en el navegador y vuelve a intentarlo.'
+        : 'No se encontró una cámara disponible. Verifica el dispositivo o sube una imagen.';
+      setCameraError(message);
     }
   };
 
