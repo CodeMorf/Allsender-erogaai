@@ -135,7 +135,11 @@ async function prepareLocalOCRImage(image: ReceiptImage): Promise<Buffer> {
   return sharp(source, { failOn: 'none' })
     .rotate()
     .trim()
-    .resize({ width: 2200, withoutEnlargement: false })
+    // Keep the local OCR bounded on mobile photos. Upscaling a long receipt to
+    // 2200px wide made Tesseract scan 4-6 oversized variants and could take a
+    // minute. This cap preserves readable text while keeping the fast path
+    // predictable.
+    .resize({ width: 1400, height: 2400, fit: 'inside', withoutEnlargement: false })
     .grayscale()
     .normalize()
     .sharpen({ sigma: 1 })
@@ -156,10 +160,10 @@ async function prepareLocalOCRReceiptCrops(image: ReceiptImage): Promise<Buffer[
   const bodyTop = Math.round(height * 0.28);
   const bodyHeight = Math.max(1, Math.min(height - bodyTop, Math.round(height * 0.45)));
   return Promise.all([
-    sharp(rotatedSource).extract({ left, top: 0, width: cropWidth, height: headerHeight }).resize({ width: 2200, withoutEnlargement: false }).grayscale().normalize().sharpen({ sigma: 1 }).png().toBuffer(),
+    sharp(rotatedSource).extract({ left, top: 0, width: cropWidth, height: headerHeight }).resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: false }).grayscale().normalize().sharpen({ sigma: 1 }).png().toBuffer(),
     // Preserve the original receipt pixels for the body. On thermal paper,
     // aggressive contrast/sharpening can turn aligned amount columns into noise.
-    sharp(rotatedSource).extract({ left, top: bodyTop, width: cropWidth, height: bodyHeight }).resize({ width: 2200, withoutEnlargement: false }).png().toBuffer()
+    sharp(rotatedSource).extract({ left, top: bodyTop, width: cropWidth, height: bodyHeight }).resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: false }).png().toBuffer()
   ]);
 }
 
@@ -413,43 +417,41 @@ export async function extractWithLocalOCR(image: ReceiptImage, segmentIndex = 0)
       return parseLocalOCRText(result.data.text || '', result.data.confidence || 0, segmentIndex);
     };
 
-    const originalInput = imageAsDataUrl(image);
+    const originalInput = await prepareLocalOCRImage(image);
     const primary = await recognizeWithMode(originalInput, PSM.AUTO);
-    const candidates = [primary];
+    const candidates: ReceiptExtraction[] = [primary];
     const needsRetry = (extraction: ReceiptExtraction) => extraction.confidence_score < Number(process.env.LOCAL_OCR_CONFIDENCE_THRESHOLD || 78)
       || !extraction.supplier_rnc
       || !extraction.ncf
       || extraction.total_amount <= 0
       || extraction.line_items.length === 0;
 
-    if (needsRetry(primary)) {
-      candidates.push(await recognizeWithMode(originalInput, PSM.SINGLE_BLOCK));
-    }
-
-    const bestOriginal = candidates.reduce((best, candidate) => (
-      receiptQuality(candidate) > receiptQuality(best) ? candidate : best
-    ), primary);
-    if (bestOriginal.total_amount > 0 && bestOriginal.line_items.length > 0 && bestOriginal.confidence_score >= 78) {
-      return bestOriginal;
+    if (!needsRetry(primary)) {
+      return primary;
     }
 
     try {
-      const enhancedInput = await prepareLocalOCRImage(image);
-      candidates.push(await recognizeWithMode(enhancedInput, PSM.AUTO));
-      const bestEnhanced = candidates.at(-1)!;
-      if (needsRetry(bestEnhanced)) candidates.push(await recognizeWithMode(enhancedInput, PSM.SINGLE_BLOCK));
-
       const cropInputs = await prepareLocalOCRReceiptCrops(image);
       if (cropInputs.length > 0) {
         // Long thermal receipts often lose their middle columns when OCR runs
         // over the entire photo. Read the header and body separately, then
         // merge only fields that the full-document OCR did not find.
-        let mergedCropExtraction = bestOriginal;
-        for (const cropInput of cropInputs) {
+        const needsHeader = !primary.supplier_name || !primary.supplier_rnc || !primary.ncf || !primary.date;
+        const needsBody = primary.total_amount <= 0 || primary.line_items.length === 0;
+        const cropIndexes = [
+          ...(needsHeader ? [0] : []),
+          ...(needsBody ? [1] : [])
+        ];
+        let mergedCropExtraction = primary;
+        for (const cropIndex of cropIndexes) {
+          const cropInput = cropInputs[cropIndex];
           const cropResult = await recognizeWithMode(cropInput, PSM.SINGLE_BLOCK);
           mergedCropExtraction = mergeLocalExtractions(mergedCropExtraction, cropResult);
           candidates.push(mergedCropExtraction);
         }
+      } else {
+        // For non-thermal layouts, one alternate segmentation pass is enough.
+        candidates.push(await recognizeWithMode(originalInput, PSM.SINGLE_BLOCK));
       }
     } catch (error: any) {
       console.warn(`[Local OCR] No se pudo mejorar la imagen; se conservará la mejor lectura original: ${error.message}`);
