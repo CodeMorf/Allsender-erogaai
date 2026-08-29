@@ -29,7 +29,7 @@ export function normalizeDgiiStatus(raw: unknown): Supplier['status_dgii'] {
     .toUpperCase()
     .replace(/[\s-]+/g, '_');
   if (status === 'ACTIVO') return 'ACTIVO';
-  if (status === 'SUSPENDIDO') return 'INACTIVO';
+  if (status === 'SUSPENDIDO') return 'SUSPENDIDO';
   if (status === 'DADO_DE_BAJA' || status === 'DADO_BAJA') return 'DADO_DE_BAJA';
   if (status === 'INACTIVO') return 'INACTIVO';
   if (status === 'NO_LOCALIZADO') return 'NO_LOCALIZADO';

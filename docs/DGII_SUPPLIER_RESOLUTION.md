@@ -25,12 +25,13 @@ Se guardan `rnc_normalized`, razón social, nombre comercial, categoría, régim
 Estados internos:
 
 - `ACTIVO`
+- `SUSPENDIDO`
 - `INACTIVO`
 - `DADO_DE_BAJA`
 - `NO_LOCALIZADO`
 - `DESCONOCIDO`
 
-Por decisión funcional de ErogaAI, el estado externo `SUSPENDIDO` se normaliza como empresa `INACTIVO`; no se presenta un estado separado llamado `SUSPENDIDO`. Los demás estados no se convierten indiscriminadamente en inactivo.
+El estado externo `SUSPENDIDO` se conserva como `SUSPENDIDO` y se presenta separado de `INACTIVO`. No se convierten estados DGII entre sí ni se usa `INACTIVO` como sustituto de `SUSPENDIDO`.
 
 Una empresa distinta de `ACTIVO` obliga a revisión y no se aprueba automáticamente.
 

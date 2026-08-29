@@ -31,6 +31,8 @@ import {
 import type { DgiiTaxpayerData } from '../services/dgii-provider.service.ts';
 import { decryptApiKey, encryptApiKey, generateRawApiKey, hashApiKey, maskApiKey } from '../encryption.ts';
 import { PERMISSIONS, defaultRolesForOrg } from '../rbac.ts';
+import { normalizeItbisRate } from '../../src/utils/fiscalTaxes.ts';
+import { validateExpenseForApproval, type ExpenseApprovalEvaluation } from '../services/expense-approval.service.ts';
 
 export class RepositoryError extends Error {
   constructor(
@@ -1907,7 +1909,12 @@ export class PrismaRepository {
           ...(data.external_id ? [{ external_id: data.external_id }] : [])
         ] }, include: { line_items: true } })
       : null;
-    if (existingByKey && existingByKey.id !== data.id) return this.toExpense(existingByKey);
+    if (existingByKey && existingByKey.id !== data.id) {
+      // Idempotency must not bypass the approval gate when a caller is
+      // explicitly trying to transition the existing row to APROBADO.
+      if (data.status !== 'APROBADO') return this.toExpense(existingByKey);
+      return this.saveExpense(orgId, { ...data, id: existingByKey.id });
+    }
 
     const existing = data.id ? await this.prisma.expense.findFirst({ where: { id: data.id, organization_id: orgId }, include: { line_items: true } }) : null;
     if (data.id && !existing) throw new RepositoryError('Erogación no encontrada.', 404, 'EXPENSE_NOT_FOUND');
@@ -1928,22 +1935,36 @@ export class PrismaRepository {
     ]);
     if (!company) throw new RepositoryError('La empresa de la erogación no pertenece a la organización.', 422, 'EXPENSE_COMPANY_SCOPE_INVALID');
     if (!branch || branch.company_id !== companyId) throw new RepositoryError('La sucursal de la erogación no pertenece a la empresa.', 422, 'EXPENSE_BRANCH_SCOPE_INVALID');
-    if (data.supplier_id) {
-      const supplier = await this.prisma.supplier.findFirst({ where: { id: data.supplier_id, organization_id: orgId } });
-      if (!supplier) throw new RepositoryError('El proveedor no pertenece a la organización.', 422, 'EXPENSE_SUPPLIER_SCOPE_INVALID');
-    }
     const receiptSessionId = data.receipt_session_id || existing?.receipt_session_id;
+    let receiptSession: any = null;
+    let supplierRow: any = null;
+    let effectiveSupplierId = data.supplier_id !== undefined ? data.supplier_id || null : existing?.supplier_id || null;
     if (receiptSessionId) {
-      const receiptSession = await this.prisma.receiptSession.findFirst({ where: { id: receiptSessionId, organization_id: orgId } });
+      receiptSession = await this.prisma.receiptSession.findFirst({ where: { id: receiptSessionId, organization_id: orgId } });
       if (!receiptSession) throw new RepositoryError('La sesión del comprobante no pertenece a la organización.', 422, 'EXPENSE_RECEIPT_SESSION_SCOPE_INVALID');
-      const linksNewSession = !existing || (data.receipt_session_id !== undefined && data.receipt_session_id !== existing.receipt_session_id);
-      if ((data.status || existing?.status) === 'APROBADO' && receiptSession.status !== 'PROCESSED' && linksNewSession) {
-        throw new RepositoryError('El comprobante requiere revisión antes de ser aprobado.', 422, 'EXPENSE_RECEIPT_REVIEW_REQUIRED');
+      if (receiptSession.supplier_id) {
+        if (effectiveSupplierId && effectiveSupplierId !== receiptSession.supplier_id) {
+          throw new RepositoryError('El proveedor no coincide con el proveedor validado en la sesión.', 422, 'EXPENSE_SUPPLIER_SESSION_MISMATCH');
+        }
+        effectiveSupplierId = receiptSession.supplier_id;
+      }
+    }
+    if (effectiveSupplierId) {
+      supplierRow = await this.prisma.supplier.findFirst({ where: { id: effectiveSupplierId, organization_id: orgId } });
+      if (!supplierRow) throw new RepositoryError('El proveedor no pertenece a la organización.', 422, 'EXPENSE_SUPPLIER_SCOPE_INVALID');
+      if (receiptSession && supplierRow.rnc_normalized && data.supplier_rnc !== undefined) {
+        const expenseRnc = String(data.supplier_rnc || '').replace(/\D/g, '');
+        const supplierRnc = String(supplierRow.rnc_normalized || '').replace(/\D/g, '');
+        if (expenseRnc && supplierRnc && expenseRnc !== supplierRnc) {
+          throw new RepositoryError('El RNC no coincide con el proveedor validado en la sesión.', 422, 'EXPENSE_SUPPLIER_RNC_MISMATCH');
+        }
       }
     }
 
     const value = (key: keyof ExpenseRecord, fallback: any) => (data[key] !== undefined ? data[key] : fallback);
     const expenseId = existing?.id || data.id || id('exp');
+    const finalStatus = value('status', existing?.status || 'PENDIENTE_REVISION');
+    const finalLineItems = Array.isArray(data.line_items) ? data.line_items : (existing?.line_items || []);
     const expenseData: any = {
       external_id: value('external_id', existing?.external_id || null),
       idempotency_key: value('idempotency_key', existing?.idempotency_key || null),
@@ -1955,8 +1976,8 @@ export class PrismaRepository {
       expense_date: value('expense_date', value('date', existing?.expense_date || new Date().toISOString().split('T')[0])),
       supplier_name: value('supplier_name', existing?.supplier_name || 'Proveedor No Identificado'),
       supplier_rnc: value('supplier_rnc', existing?.supplier_rnc || ''),
-      supplier_id: value('supplier_id', existing?.supplier_id || null),
-      receipt_session_id: value('receipt_session_id', existing?.receipt_session_id || null),
+      supplier_id: effectiveSupplierId,
+      receipt_session_id: receiptSessionId || null,
       ncf: value('ncf', existing?.ncf || ''),
       ncf_type: value('ncf_type', existing?.ncf_type || 'B01'),
       document_type: value('document_type', existing?.document_type || 'FACTURA_CREDITO_FISCAL'),
@@ -1974,7 +1995,7 @@ export class PrismaRepository {
       payment_method: value('payment_method', existing?.payment_method || 'TRANSFERENCIA'),
       dgii_expense_type: value('dgii_expense_type', existing?.dgii_expense_type || null),
       dgii_payment_type: value('dgii_payment_type', existing?.dgii_payment_type || null),
-      status: value('status', existing?.status || 'PENDIENTE_REVISION'),
+      status: finalStatus,
       approval_notes: value('approval_notes', existing?.approval_notes || null),
       correction_request_note: value('correction_request_note', existing?.correction_request_note || null),
       reviewed_by: value('reviewed_by', existing?.reviewed_by || null),
@@ -1990,6 +2011,30 @@ export class PrismaRepository {
       erp_sync_error: value('erp_sync_error', existing?.erp_sync_error || null)
     };
 
+    let approvalEvaluation: ExpenseApprovalEvaluation | null = null;
+    if (finalStatus === 'APROBADO') {
+      approvalEvaluation = validateExpenseForApproval(
+        {
+          supplier_id: effectiveSupplierId,
+          receipt_session_id: receiptSessionId,
+          supplier_rnc: expenseData.supplier_rnc,
+          ncf: expenseData.ncf,
+          ncf_type: expenseData.ncf_type,
+          subtotal: expenseData.subtotal,
+          itbis_amount: expenseData.itbis_amount,
+          legal_tip_amount: expenseData.legal_tip_amount,
+          other_taxes: expenseData.other_taxes,
+          total_amount: expenseData.total_amount,
+          line_items: finalLineItems as any
+        },
+        receiptSession ? { id: receiptSession.id, status: receiptSession.status, supplier_id: receiptSession.supplier_id } : null,
+        supplierRow ? { id: supplierRow.id, status_dgii: supplierRow.status_dgii, rnc_normalized: supplierRow.rnc_normalized } : null
+      );
+      if (!approvalEvaluation.valid) {
+        throw new RepositoryError(approvalEvaluation.message, 422, approvalEvaluation.code);
+      }
+    }
+
     const saved = await this.prisma.$transaction(async tx => {
       const expense = existing
         ? await tx.expense.update({ where: { id: expenseId }, data: expenseData, include: { line_items: true } })
@@ -2002,7 +2047,7 @@ export class PrismaRepository {
             description: item.description,
             quantity: Number(item.quantity) || 1,
             unit_price: Number(item.unit_price) || 0,
-            itbis_rate: Number(item.itbis_rate) || 0,
+            itbis_rate: normalizeItbisRate(item.itbis_rate),
             total: Number(item.total) || 0,
             sku: item.sku,
             discount: item.discount,
@@ -2016,8 +2061,14 @@ export class PrismaRepository {
           })) });
         }
       }
-      if (data.receipt_session_id) {
-        await tx.receiptSession.update({ where: { id: data.receipt_session_id }, data: { status: 'SAVED', supplier_id: data.supplier_id || null } });
+      if (receiptSessionId) {
+        const sessionData: any = { supplier_id: effectiveSupplierId };
+        if (finalStatus === 'APROBADO') {
+          sessionData.status = 'SAVED';
+          sessionData.fiscal_validation_json = JSON.stringify(approvalEvaluation!.fiscalValidation);
+          sessionData.reconciliation_json = JSON.stringify(approvalEvaluation!.reconciliation);
+        }
+        await tx.receiptSession.update({ where: { id: receiptSessionId }, data: sessionData });
       }
       await this.auditTx(tx, { organization_id: orgId, user_id: creator.id, user_name: creator.name, action: existing ? 'ACTUALIZAR_GASTO' : 'CREAR_GASTO', entity_type: 'EXPENSE', entity_id: expense.id, details: `${existing ? 'Actualizó' : 'Radicó'} comprobante ${expense.ncf || 'Borrador'} por RD$ ${expense.total_amount.toFixed(2)}.` });
       return tx.expense.findUniqueOrThrow({ where: { id: expense.id }, include: { line_items: true } });

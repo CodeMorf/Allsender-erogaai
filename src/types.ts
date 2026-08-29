@@ -94,7 +94,7 @@ export interface Supplier {
   phone?: string;
   email?: string;
   category_default?: string;
-  status_dgii: 'ACTIVO' | 'DADO_DE_BAJA' | 'INACTIVO' | 'NO_LOCALIZADO' | 'DESCONOCIDO';
+  status_dgii: 'ACTIVO' | 'SUSPENDIDO' | 'DADO_DE_BAJA' | 'INACTIVO' | 'NO_LOCALIZADO' | 'DESCONOCIDO';
   categoria_dgii?: string;
   regimen_de_pagos?: string;
   actividad_economica?: string;
@@ -212,6 +212,7 @@ export type ExpenseClassification =
 export type NcfType = 
   | 'B01' // Crédito Fiscal
   | 'B02' // Consumidor Final
+  | 'B11' // Proveedores Informales
   | 'B14' // Regímenes Especiales
   | 'B15' // Gubernamental
   | 'B16' // Exportaciones

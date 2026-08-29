@@ -116,4 +116,13 @@ describe('receipt mathematical reconciliation', () => {
     expect(result.discounts).toBe(100);
     expect(result.calculated_total).toBe(1162);
   });
+
+  it('rejects a line edited inconsistently with its quantity and unit price', () => {
+    const result = reconcileReceiptMath(base({
+      line_items: [{ description: 'BIEN EDITADO', quantity: 1, unit_price: 1000, itbis_rate: 18, total: 900 }],
+      itbis_amount: 180,
+      total_amount: 1080
+    }));
+    expect(result.is_valid).toBe(false);
+  });
 });

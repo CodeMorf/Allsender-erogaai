@@ -1,3 +1,5 @@
+import type { NcfType } from '../types.ts';
+
 /**
  * Utilidades fiscales oficiales para República Dominicana (DGII)
  * Validación algorítmica de RNC (9 dígitos) y Cédula de Identidad y Electoral (11 dígitos)
@@ -134,6 +136,32 @@ export function validateDominicanRnc(raw: string): RncValidationResult {
     formatted: raw,
     clean,
     message: `Longitud incorrecta (${clean.length} dígitos). Debe tener 9 (RNC) u 11 (Cédula).`
+  };
+}
+
+export interface NcfValidationResult {
+  isValid: boolean;
+  ncfType: NcfType | 'UNKNOWN';
+  clean: string;
+  message: string;
+}
+
+/** Validates the NCF/e-NCF prefixes and their official sequence lengths. */
+export function validateDominicanNcf(raw: string): NcfValidationResult {
+  const clean = (raw || '').toUpperCase().replace(/[\s-]/g, '');
+  const traditional = /^(B01|B02|B11|B14|B15|B16)(\d{8})$/.exec(clean);
+  if (traditional) {
+    return { isValid: true, ncfType: traditional[1] as NcfType, clean, message: 'NCF tradicional válido.' };
+  }
+  const electronic = /^(E31|E32|E44|E45)(\d{10})$/.exec(clean);
+  if (electronic) {
+    return { isValid: true, ncfType: electronic[1] as NcfType, clean, message: 'e-NCF válido.' };
+  }
+  return {
+    isValid: false,
+    ncfType: 'UNKNOWN',
+    clean,
+    message: clean ? `NCF con formato DGII no reconocido (${clean}).` : 'El NCF es requerido para aprobar.'
   };
 }
 

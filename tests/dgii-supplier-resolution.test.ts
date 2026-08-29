@@ -85,10 +85,12 @@ describe('Dominican fiscal identifier validation', () => {
 });
 
 describe('MegaPlus-backed supplier resolution', () => {
-  it('maps SUSPENDIDO to the only requested inactive company state', () => {
-    expect(normalizeDgiiStatus('SUSPENDIDO')).toBe('INACTIVO');
+  it('preserves SUSPENDIDO as a distinct DGII state and keeps other states exact', () => {
+    expect(normalizeDgiiStatus('SUSPENDIDO')).toBe('SUSPENDIDO');
+    expect(normalizeDgiiStatus('ACTIVO')).toBe('ACTIVO');
     expect(normalizeDgiiStatus('DADO DE BAJA')).toBe('DADO_DE_BAJA');
     expect(normalizeDgiiStatus('NO LOCALIZADO')).toBe('NO_LOCALIZADO');
+    expect(normalizeDgiiStatus('INACTIVO')).toBe('INACTIVO');
   });
 
   it('handles HTTP 400, 429 and network errors with explicit outcomes', async () => {

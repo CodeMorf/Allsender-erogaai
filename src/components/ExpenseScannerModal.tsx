@@ -9,6 +9,7 @@ import {
   ExpenseRecord
 } from '../types.js';
 import { validateRNC, validateNCF, formatCurrency } from '../utils/formatters.js';
+import { normalizeItbisRate } from '../utils/fiscalTaxes.ts';
 import { 
   Camera, 
   Upload, 
@@ -33,6 +34,32 @@ interface CapturedSegment {
   file_name: string;
   mime_type: string;
   status: string;
+}
+
+function fiscalFingerprint(input: {
+  supplierName: string;
+  supplierRnc: string;
+  ncf: string;
+  ncfType: NcfType;
+  subtotal: number;
+  itbisAmount: number;
+  legalTipAmount: number;
+  otherTaxes: number;
+  totalAmount: number;
+  lineItems: LineItem[];
+}): string {
+  return JSON.stringify({
+    supplierName: input.supplierName.trim(),
+    supplierRnc: input.supplierRnc.replace(/\D/g, ''),
+    ncf: input.ncf.replace(/[\s-]/g, '').toUpperCase(),
+    ncfType: input.ncfType,
+    subtotal: Number(input.subtotal),
+    itbisAmount: Number(input.itbisAmount),
+    legalTipAmount: Number(input.legalTipAmount),
+    otherTaxes: Number(input.otherTaxes),
+    totalAmount: Number(input.totalAmount),
+    lineItems: input.lineItems.map(({ id: _id, ...item }) => item)
+  });
 }
 
 export const ExpenseScannerModal: React.FC = () => {
@@ -79,6 +106,7 @@ export const ExpenseScannerModal: React.FC = () => {
   const [aiObservations, setAiObservations] = useState<string[]>([]);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [processingStatus, setProcessingStatus] = useState<string>('Analizando comprobante...');
+  const [validationSnapshot, setValidationSnapshot] = useState<string | null>(null);
 
   // Active AI Provider info
   const activeProvider = aiProviders.find(p => p.is_primary && p.is_active) || aiProviders[0];
@@ -97,6 +125,7 @@ export const ExpenseScannerModal: React.FC = () => {
       setReplaceSegmentId(null);
       setProcessedSession(null);
       setCameraError(null);
+      setValidationSnapshot(null);
     }
   }, [isScannerOpen]);
 
@@ -381,7 +410,7 @@ export const ExpenseScannerModal: React.FC = () => {
         description: li.description,
         quantity: li.quantity,
         unit_price: li.unit_price,
-        itbis_rate: li.itbis_rate || 18,
+        itbis_rate: normalizeItbisRate(li.itbis_rate),
         total: li.total,
         sku: li.sku,
         discount: li.discount,
@@ -392,6 +421,18 @@ export const ExpenseScannerModal: React.FC = () => {
         raw_text: li.raw_text
       }));
       setLineItems(parsedItems);
+      setValidationSnapshot(fiscalFingerprint({
+        supplierName: ext.supplier_name || '',
+        supplierRnc: ext.supplier_rnc || '',
+        ncf: ext.ncf || '',
+        ncfType: ext.ncf_type || 'B01',
+        subtotal: ext.subtotal || 0,
+        itbisAmount: ext.itbis_amount || 0,
+        legalTipAmount: ext.legal_tip_amount || 0,
+        otherTaxes: ext.other_taxes || 0,
+        totalAmount: ext.total_amount || 0,
+        lineItems: parsedItems
+      }));
 
       setStep('REVIEW_FORM');
       if (session.status === 'REVIEW_REQUIRED') {
@@ -458,7 +499,7 @@ export const ExpenseScannerModal: React.FC = () => {
       description: 'Nuevo concepto',
       quantity: 1,
       unit_price: 0,
-      itbis_rate: 18,
+      itbis_rate: 0,
       total: 0
     };
     setLineItems([...lineItems, newItem]);
@@ -469,6 +510,10 @@ export const ExpenseScannerModal: React.FC = () => {
   };
 
   const handleSaveExpense = async (status: 'BORRADOR' | 'PENDIENTE_REVISION' | 'APROBADO') => {
+    if (status === 'APROBADO' && !canApproveDirect) {
+      showToast('warning', 'Revalidación requerida', 'Corrija los datos y vuelva a procesar el comprobante antes de aprobarlo.');
+      return;
+    }
     try {
       const reportedProvider = processedSession?.meta?.provider_used || activeProvider?.provider_type || 'TESSERACT';
       const aiProviderUsed: ExpenseRecord['ai_provider_used'] = ['GEMINI', 'GROQ', 'OPENAI', 'CODEMORF'].includes(reportedProvider)
@@ -510,6 +555,15 @@ export const ExpenseScannerModal: React.FC = () => {
 
   const rncValidation = validateRNC(supplierRnc);
   const ncfValidation = validateNCF(ncf);
+  const currentFiscalFingerprint = fiscalFingerprint({ supplierName, supplierRnc, ncf, ncfType, subtotal, itbisAmount, legalTipAmount, otherTaxes, totalAmount, lineItems });
+  const validationIsCurrent = validationSnapshot !== null && validationSnapshot === currentFiscalFingerprint;
+  const supplierIsActive = processedSession?.supplier_resolution?.dgii_status === 'ACTIVO';
+  const canApproveDirect = processedSession?.status === 'PROCESSED'
+    && validationIsCurrent
+    && processedSession.fiscal_validation?.is_valid === true
+    && processedSession.reconciliation?.is_valid === true
+    && supplierIsActive
+    && ['ADMIN', 'SUPERVISOR', 'ACCOUNTANT'].includes(currentUser?.role || '');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
@@ -821,6 +875,26 @@ export const ExpenseScannerModal: React.FC = () => {
                   </div>
                 )}
 
+                {processedSession && (
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-[11px] dark:border-slate-700 dark:bg-slate-900">
+                    <div className="mb-2 flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-200">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" /> Validación para aprobar
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <span className={processedSession.fiscal_validation?.rnc_valid ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.fiscal_validation?.rnc_valid ? '✓ RNC válido' : '⚠ RNC por revisar'}</span>
+                      <span className={processedSession.fiscal_validation?.ncf_valid ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.fiscal_validation?.ncf_valid ? '✓ NCF válido' : '⚠ NCF por revisar'}</span>
+                      <span className={processedSession.reconciliation?.is_valid ? 'text-emerald-600' : 'text-amber-600'}>{processedSession.reconciliation?.is_valid ? '✓ Montos cuadrados' : '⚠ Montos por revisar'}</span>
+                      <span className={supplierIsActive ? 'text-emerald-600' : 'text-amber-600'}>{supplierIsActive ? '✓ Empresa activa' : '⚠ Empresa no activa'}</span>
+                    </div>
+                    {!validationIsCurrent && (
+                      <p className="mt-2 flex items-start gap-1 text-amber-700 dark:text-amber-400"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Los datos fueron modificados después de la validación. Deben volver a validarse antes de aprobar.</p>
+                    )}
+                    {(processedSession.fiscal_validation?.errors || []).length > 0 && (
+                      <p className="mt-2 text-rose-600 dark:text-rose-400">{processedSession.fiscal_validation?.errors.join(' ')}</p>
+                    )}
+                  </div>
+                )}
+
                 {/* AI Observations Box */}
                 {aiObservations.length > 0 && (
                   <div className="p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 text-xs text-blue-900 dark:text-blue-300 space-y-1">
@@ -893,10 +967,8 @@ export const ExpenseScannerModal: React.FC = () => {
                       onChange={e => {
                         const val = e.target.value.toUpperCase();
                         setNcf(val);
-                        if (val.startsWith('B01')) setNcfType('B01');
-                        else if (val.startsWith('B02')) setNcfType('B02');
-                        else if (val.startsWith('E31')) setNcfType('E31');
-                        else if (val.startsWith('E32')) setNcfType('E32');
+                        const detectedType = (['B01', 'B02', 'B11', 'B14', 'B15', 'B16', 'E31', 'E32', 'E44', 'E45'] as NcfType[]).find(type => val.replace(/[\s-]/g, '').startsWith(type));
+                        if (detectedType) setNcfType(detectedType);
                       }}
                       placeholder="B0100000001"
                       className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -964,19 +1036,21 @@ export const ExpenseScannerModal: React.FC = () => {
                     </button>
                   </div>
                   <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
-                    <table className="w-full text-left text-xs">
+                    <table className="w-full min-w-[620px] text-left text-xs">
                       <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px]">
                         <tr>
                           <th className="p-2">Descripción</th>
                           <th className="p-2 w-16 text-center">Cant.</th>
                           <th className="p-2 w-24 text-right">Precio</th>
+                          <th className="p-2 w-20 text-right">Desc.</th>
+                          <th className="p-2 w-16 text-right">ITBIS %</th>
                           <th className="p-2 w-24 text-right">Total</th>
                           <th className="p-2 w-8"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                         {lineItems.length === 0 && (
-                          <tr><td colSpan={5} className="p-4 text-center text-[11px] text-amber-700 dark:text-amber-400">No se detectaron líneas de productos. Revise el comprobante o agregue los conceptos manualmente; ErogaAI no inventa líneas.</td></tr>
+                          <tr><td colSpan={7} className="p-4 text-center text-[11px] text-amber-700 dark:text-amber-400">No se detectaron líneas de productos. Revise el comprobante o agregue los conceptos manualmente; ErogaAI no inventa líneas.</td></tr>
                         )}
                         {lineItems.map(item => (
                           <tr key={item.id}>
@@ -1012,6 +1086,30 @@ export const ExpenseScannerModal: React.FC = () => {
                                 className="w-full px-1.5 py-1 text-xs text-right bg-transparent border-b border-transparent focus:border-blue-500 focus:outline-none"
                               />
                             </td>
+                            <td className="p-1.5 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                value={item.discount ?? 0}
+                                onChange={e => {
+                                  const discount = parseFloat(e.target.value) || 0;
+                                  setLineItems(lineItems.map(i => i.id === item.id ? { ...i, discount } : i));
+                                }}
+                                className="w-full px-1.5 py-1 text-xs text-right bg-transparent border-b border-transparent focus:border-blue-500 focus:outline-none"
+                              />
+                            </td>
+                            <td className="p-1.5 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                value={item.itbis_rate ?? 0}
+                                onChange={e => {
+                                  const itbisRate = normalizeItbisRate(e.target.value);
+                                  setLineItems(lineItems.map(i => i.id === item.id ? { ...i, itbis_rate: itbisRate } : i));
+                                }}
+                                className="w-full px-1.5 py-1 text-xs text-right bg-transparent border-b border-transparent focus:border-blue-500 focus:outline-none"
+                              />
+                            </td>
                             <td className="p-1.5 text-right font-medium">
                               {formatCurrency(item.total, 'DOP')}
                             </td>
@@ -1043,7 +1141,7 @@ export const ExpenseScannerModal: React.FC = () => {
                     />
                   </div>
                   <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
-                    <span>ITBIS (18%):</span>
+                    <span>ITBIS:</span>
                     <input
                       type="number"
                       value={itbisAmount}
@@ -1057,6 +1155,15 @@ export const ExpenseScannerModal: React.FC = () => {
                       type="number"
                       value={legalTipAmount}
                       onChange={e => handleRecalculateTotals(subtotal, itbisAmount, parseFloat(e.target.value) || 0, otherTaxes)}
+                      className="w-28 text-right font-mono px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
+                    <span>Otros impuestos:</span>
+                    <input
+                      type="number"
+                      value={otherTaxes}
+                      onChange={e => handleRecalculateTotals(subtotal, itbisAmount, legalTipAmount, parseFloat(e.target.value) || 0)}
                       className="w-28 text-right font-mono px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                     />
                   </div>
@@ -1108,7 +1215,9 @@ export const ExpenseScannerModal: React.FC = () => {
                     type="button"
                     id="btn-approve-direct"
                     onClick={() => handleSaveExpense('APROBADO')}
-                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm shadow-emerald-600/30"
+                    disabled={!canApproveDirect}
+                    title={!canApproveDirect ? 'Los datos deben estar validados y el proveedor debe estar ACTIVO.' : undefined}
+                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm shadow-emerald-600/30 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>Aprobar Inmediatamente</span>

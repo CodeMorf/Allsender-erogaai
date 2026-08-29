@@ -140,17 +140,45 @@ export function consolidateReceiptSegments(inputs: SegmentExtractionInput[]): Co
 
 export function reconcileReceiptMath(extraction: ReceiptExtraction): ReceiptMathReconciliation {
   const lineItems = extraction.line_items || [];
-  const lineItemsTotal = lineItems.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const discounts = lineItems.reduce((sum, item) => sum + Number(item.discount || 0), 0);
-  const base = lineItems.length > 0 ? lineItemsTotal : Number(extraction.subtotal || 0);
+  const lineItemsAreConsistent = lineItems.every(item => {
+    const quantity = Number(item.quantity);
+    const unitPrice = Number(item.unit_price);
+    const total = Number(item.total);
+    const discount = Number(item.discount || 0);
+    if (![quantity, unitPrice, total, discount].every(Number.isFinite) || quantity < 0 || unitPrice < 0 || total < 0 || discount < 0) return false;
+    const gross = quantity * unitPrice;
+    const grossMatchesTotal = Math.abs(gross - total) <= 0.02;
+    const taxableAmount = item.taxable_amount === undefined || item.taxable_amount === null
+      ? total - discount
+      : Number(item.taxable_amount);
+    const taxableIsFinite = Number.isFinite(taxableAmount) && taxableAmount >= 0;
+    const taxableMatchesDiscountedTotal = Math.abs(taxableAmount - (total - discount)) <= 0.02;
+    return grossMatchesTotal && taxableIsFinite && taxableMatchesDiscountedTotal;
+  });
+  const lineItemsTotal = lineItems.reduce((sum, item) => {
+    const gross = Number(item.total || 0);
+    const discount = Number(item.discount || 0);
+    const taxableAmount = item.taxable_amount === undefined || item.taxable_amount === null
+      ? gross - discount
+      : Number(item.taxable_amount || 0);
+    return sum + (Number.isFinite(taxableAmount) ? taxableAmount : 0);
+  }, 0);
+  const discounts = lineItems.reduce((sum, item) => sum + (Number.isFinite(Number(item.discount)) ? Number(item.discount) : 0), 0);
+  const declaredSubtotal = Number(extraction.subtotal || 0);
+  const base = lineItems.length > 0 ? lineItemsTotal : declaredSubtotal;
+  const itemItbis = lineItems.reduce((sum, item) => sum + (Number.isFinite(Number(item.itbis_amount)) ? Number(item.itbis_amount) : 0), 0);
+  const declaredItbis = Number(extraction.itbis_amount || 0);
+  const itbis = declaredItbis !== 0 || itemItbis === 0 ? declaredItbis : itemItbis;
   const calculated = base
-    - discounts
-    + Number(extraction.itbis_amount || 0)
+    + itbis
     + Number(extraction.legal_tip_amount || 0)
     + Number(extraction.other_taxes || 0);
   const expected = Number(extraction.total_amount || 0);
   const difference = Number((expected - calculated).toFixed(2));
   const tolerance = 0.02;
+  const subtotalDifference = lineItems.length > 0 && declaredSubtotal > 0
+    ? Number((declaredSubtotal - lineItemsTotal).toFixed(2))
+    : 0;
   const probableSegments = [...new Set(
     lineItems
       .filter(item => Number(item.confidence ?? 100) < 70)
@@ -158,7 +186,7 @@ export function reconcileReceiptMath(extraction: ReceiptExtraction): ReceiptMath
   )];
 
   return {
-    is_valid: expected > 0 && Math.abs(difference) <= tolerance,
+    is_valid: expected > 0 && lineItemsAreConsistent && Math.abs(difference) <= tolerance && Math.abs(subtotalDifference) <= tolerance,
     expected_total: Number(expected.toFixed(2)),
     calculated_total: Number(calculated.toFixed(2)),
     difference,

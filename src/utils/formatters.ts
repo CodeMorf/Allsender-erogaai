@@ -1,4 +1,5 @@
 import { ExpenseClassification, ExpenseStatus, NcfType } from '../types.js';
+import { validateDominicanNcf } from './fiscalValidators.ts';
 
 export function formatCurrency(amount: number, currency: 'DOP' | 'USD' | 'EUR' = 'DOP'): string {
   const symbol = currency === 'DOP' ? 'RD$' : currency === 'USD' ? 'US$' : '€';
@@ -90,37 +91,8 @@ export function validateRNC(rnc: string): { isValid: boolean; type: 'RNC' | 'CED
 
 // NCF structure validator
 export function validateNCF(ncf: string): { isValid: boolean; ncfType: NcfType | 'UNKNOWN'; message: string } {
-  const clean = ncf.trim().toUpperCase();
-  // Standard NCF: B + 2 digits type + 8 sequence digits (total 11 chars)
-  // Electronic e-NCF: E + 2 digits type + 10 sequence digits (total 13 chars)
-  const bRegex = /^B(01|02|14|15|16)[0-9]{8}$/;
-  const eRegex = /^E(31|32|44|45)[0-9]{10}$/;
-
-  if (bRegex.test(clean)) {
-    const type = clean.substring(0, 3) as NcfType;
-    const desc = type === 'B01' ? 'Crédito Fiscal' : type === 'B02' ? 'Consumo' : type === 'B14' ? 'Regímenes Especiales' : 'Gubernamental';
-    return {
-      isValid: true,
-      ncfType: type,
-      message: `NCF Tradicional Válido: ${desc}`
-    };
-  }
-
-  if (eRegex.test(clean)) {
-    const type = clean.substring(0, 3) as NcfType;
-    const desc = type === 'E31' ? 'e-NCF Factura Crédito Fiscal' : type === 'E32' ? 'e-NCF Consumo' : 'e-NCF Especial';
-    return {
-      isValid: true,
-      ncfType: type,
-      message: `Comprobante Fiscal Electrónico: ${desc}`
-    };
-  }
-
-  return {
-    isValid: false,
-    ncfType: 'UNKNOWN',
-    message: 'Estructura de NCF no cumple con formato DGII (ej: B0100000001 o E310000000001)'
-  };
+  const result = validateDominicanNcf(ncf);
+  return { isValid: result.isValid, ncfType: result.ncfType, message: result.message };
 }
 
 export function getStatusDetails(status: ExpenseStatus) {

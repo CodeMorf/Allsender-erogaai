@@ -91,6 +91,38 @@ test('production hardening: SQL isolation, state persistence and fail-closed aut
     const tenantSupplierB = await prisma.supplier.create({ data: { id: `supplier_b_${crypto.randomBytes(5).toString('hex')}`, organization_id: tenantB.organization.id, rnc: '101001577', rnc_normalized: '101001577', name: 'Proveedor Fiscal B', status_dgii: 'ACTIVO' } });
     expect(tenantSupplierA.organization_id).not.toBe(tenantSupplierB.organization_id);
 
+    // Approval always revalidates the final edited payload against a processed SQL session.
+    const approvalSessionResponse = await tenantAContext.post('/api/receipt-sessions');
+    expect(approvalSessionResponse.status()).toBe(201);
+    const approvalSession = (await approvalSessionResponse.json()).data;
+    await prisma.receiptSession.update({
+      where: { id: approvalSession.id },
+      data: {
+        status: 'PROCESSED',
+        supplier_id: tenantSupplierA.id,
+        extraction_json: JSON.stringify({ supplier_name: tenantSupplierA.name, supplier_rnc: '101001577', ncf: 'B0100000103', ncf_type: 'B01', subtotal: 1000, itbis_amount: 180, legal_tip_amount: 0, other_taxes: 0, total_amount: 1180, line_items: [] }),
+        fiscal_validation_json: JSON.stringify({ is_valid: true, rnc_valid: true, ncf_valid: true, math_valid: true, warnings: [], errors: [] }),
+        reconciliation_json: JSON.stringify({ is_valid: true, expected_total: 1180, calculated_total: 1180, difference: 0, tolerance: 0.02, line_items_total: 1000, discounts: 0, probable_segment_indexes: [] })
+      }
+    });
+    const editedApproval = await tenantAContext.post('/api/expenses', {
+      data: { receipt_session_id: approvalSession.id, supplier_id: tenantSupplierA.id, supplier_name: tenantSupplierA.name, supplier_rnc: '101001577', ncf: 'B0100000103', ncf_type: 'B01', subtotal: 1000, itbis_amount: 180, total_amount: 1500, status: 'APROBADO', date: new Date().toISOString().slice(0, 10) }
+    });
+    expect(editedApproval.status()).toBe(422);
+    expect((await editedApproval.json()).code).toBe('EXPENSE_FISCAL_REVALIDATION_REQUIRED');
+
+    const validApprovalSessionResponse = await tenantAContext.post('/api/receipt-sessions');
+    expect(validApprovalSessionResponse.status()).toBe(201);
+    const validApprovalSession = (await validApprovalSessionResponse.json()).data;
+    await prisma.receiptSession.update({ where: { id: validApprovalSession.id }, data: { status: 'PROCESSED', supplier_id: tenantSupplierA.id } });
+    const validApproval = await tenantAContext.post('/api/expenses', {
+      data: { receipt_session_id: validApprovalSession.id, supplier_id: tenantSupplierA.id, supplier_name: tenantSupplierA.name, supplier_rnc: '101001577', ncf: 'B0100000104', ncf_type: 'B01', subtotal: 1000, itbis_amount: 180, total_amount: 1180, status: 'APROBADO', date: new Date().toISOString().slice(0, 10) }
+    });
+    expect(validApproval.status()).toBe(201);
+    const savedApprovalSession = await prisma.receiptSession.findUnique({ where: { id: validApprovalSession.id } });
+    expect(savedApprovalSession?.status).toBe('SAVED');
+    expect(JSON.parse(savedApprovalSession?.fiscal_validation_json || '{}').is_valid).toBe(true);
+
     const expenseResponse = await tenantAContext.post('/api/expenses', {
       data: { supplier_name: 'Proveedor A', supplier_rnc: '101-00000-1', ncf: 'B0100000101', subtotal: 100, itbis_amount: 18, total_amount: 118, date: new Date().toISOString().slice(0, 10) }
     });

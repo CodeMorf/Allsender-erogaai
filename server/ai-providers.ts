@@ -13,7 +13,7 @@ import {
   NcfType
 } from '../src/types.ts';
 import { prismaRepo } from './database/prisma.repository.ts';
-import { validateDominicanRnc } from '../src/utils/fiscalValidators.ts';
+import { validateFiscalData, type FiscalValidationInput } from './services/fiscal-validation.service.ts';
 
 export interface ReceiptImage {
   base64Data: string;
@@ -21,14 +21,8 @@ export interface ReceiptImage {
   filename?: string;
 }
 
-export interface ReceiptData {
+export interface ReceiptData extends FiscalValidationInput {
   supplier_name: string;
-  supplier_rnc: string;
-  ncf: string;
-  subtotal: number;
-  itbis_amount: number;
-  total_amount: number;
-  line_items?: Array<{ description: string; quantity: number; unit_price: number }>;
 }
 
 export interface AITestResult {
@@ -47,57 +41,9 @@ export interface AIProvider {
   getUsage(): Promise<AIUsage>;
 }
 
-// ----------------------------------------------------
-// Validation Logic for Dominican Republic DGII Formats
-// ----------------------------------------------------
-export function validateFiscalData(data: ReceiptData): ValidationResult {
-  const warnings: string[] = [];
-  const errors: string[] = [];
-  let rnc_valid = true;
-  let ncf_valid = true;
-  let math_valid = true;
-
-  // Clean RNC
-  const cleanRnc = (data.supplier_rnc || '').replace(/[^0-9]/g, '');
-  if (!cleanRnc) {
-    warnings.push('No se detectó RNC del proveedor en el comprobante.');
-    rnc_valid = false;
-  } else {
-    const identifierValidation = validateDominicanRnc(cleanRnc);
-    if (!identifierValidation.isValid) {
-      errors.push(`RNC o cédula inválido (${cleanRnc}): ${identifierValidation.message || 'dígito verificador incorrecto'}.`);
-      rnc_valid = false;
-    }
-  }
-
-  // Clean NCF
-  const cleanNcf = (data.ncf || '').toUpperCase().trim();
-  if (!cleanNcf) {
-    warnings.push('No se detectó NCF o Comprobante Fiscal.');
-    ncf_valid = false;
-  } else if (!/^(B01|B02|B11|B14|B15|E31|E32)\d{8,10}$/.test(cleanNcf)) {
-    warnings.push(`NCF con formato no estándar DGII (${cleanNcf}). Verifique si requiere serie especial.`);
-  }
-
-  // Mathematical Integrity Check
-  const subtotal = Number(data.subtotal) || 0;
-  const itbis = Number(data.itbis_amount) || 0;
-  const total = Number(data.total_amount) || 0;
-
-  if (Math.abs((subtotal + itbis) - total) > 2.0 && total > 0) {
-    warnings.push(`Inconsistencia en montos: Subtotal (${subtotal}) + ITBIS (${itbis}) ≠ Total (${total}).`);
-    math_valid = false;
-  }
-
-  return {
-    is_valid: errors.length === 0,
-    rnc_valid,
-    ncf_valid,
-    math_valid,
-    warnings,
-    errors
-  };
-}
+// Validation is shared with the server-side approval gate so OCR and approval
+// cannot disagree about what constitutes a valid fiscal extraction.
+export { validateFiscalData };
 
 const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. Responde únicamente JSON válido.`;
 
@@ -228,7 +174,7 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
 
   const normalizedNcf = (ncfMatch?.[1] || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
   const detectedNcfType = normalizedNcf.slice(0, 3);
-  const supportedNcfTypes: NcfType[] = ['B01', 'B02', 'B14', 'B15', 'B16', 'E31', 'E32', 'E44', 'E45'];
+  const supportedNcfTypes: NcfType[] = ['B01', 'B02', 'B11', 'B14', 'B15', 'B16', 'E31', 'E32', 'E44', 'E45'];
   const ncfType = supportedNcfTypes.includes(detectedNcfType as NcfType)
     ? detectedNcfType as NcfType
     : 'B01';
