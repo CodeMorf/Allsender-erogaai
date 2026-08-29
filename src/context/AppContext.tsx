@@ -53,6 +53,7 @@ interface AppContextType {
   setCurrentBranch: (b: Branch | null) => void;
   fetchSession: () => Promise<void>;
   fetchCompanies: () => Promise<void>;
+  saveOrganization: (organization: Partial<Organization>) => Promise<{ organization?: Organization; error?: string }>;
   saveCompany: (comp: Partial<Company>) => Promise<{ company?: Company; error?: string }>;
   deactivateCompany: (companyId: string) => Promise<boolean>;
   fetchBranches: (companyId?: string) => Promise<void>;
@@ -350,6 +351,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } catch (err) {
       console.error('Error fetching companies:', err);
+    }
+  };
+
+  const saveOrganization = async (organizationData: Partial<Organization>): Promise<{ organization?: Organization; error?: string }> => {
+    try {
+      const res = await fetch('/api/organization', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: organizationData.name,
+          rnc: organizationData.rnc,
+          address: organizationData.address,
+          phone: organizationData.phone,
+          logo_url: organizationData.logo_url,
+          currency: organizationData.currency
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        showToast('error', 'Error al guardar organización', data.error || 'No se pudo guardar la configuración.');
+        return { error: data.error || 'Error al guardar' };
+      }
+      setOrganization(data.organization);
+      showToast('success', 'Configuración guardada', 'Los datos generales de la organización fueron actualizados.');
+      await fetchAuditLogs();
+      return { organization: data.organization };
+    } catch (err: any) {
+      showToast('error', 'Error de conexión', err.message);
+      return { error: err.message };
     }
   };
 
@@ -1364,6 +1394,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentBranch,
         fetchSession,
         fetchCompanies,
+        saveOrganization,
         saveCompany,
         deactivateCompany,
         fetchBranches,

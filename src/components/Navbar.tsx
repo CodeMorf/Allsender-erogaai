@@ -77,6 +77,15 @@ export const Navbar: React.FC = () => {
       case 'categories': return 'Categorías de Gastos';
       case 'dgii-606': return 'Reporte Fiscal DGII 606';
       case 'organization': return 'Mi Empresa y Sedes';
+      case 'team':
+      case 'users': return 'Gestión de Equipo';
+      case 'erp-integration': return 'AllSender ERP';
+      case 'ai-config': return 'Lectura automática';
+      case 'api-keys': return 'Claves y accesos';
+      case 'api-docs': return 'Documentación de conexiones';
+      case 'audit-logs': return 'Pista de Auditoría';
+      case 'suppliers': return 'Proveedores y RNC';
+      case 'projects-vehicles': return 'Proyectos y vehículos';
       case 'mobile-capacitor': return 'App Móvil';
       default: return 'Panel Principal';
     }

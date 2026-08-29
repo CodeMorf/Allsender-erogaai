@@ -23,6 +23,7 @@ import { SuperAdminView } from './views/SuperAdminView.js';
 import { SuppliersView } from './views/SuppliersView.js';
 import { ProjectsVehiclesView } from './views/ProjectsVehiclesView.js';
 import { ERPIntegrationView } from './views/ERPIntegrationView.js';
+import { AIConfigurationView } from './views/AIConfigurationView.js';
 import { AuditLogView } from './views/AuditLogView.js';
 import { ApiKeysView } from './views/ApiKeysView.js';
 import { ApiDocsView } from './views/ApiDocsView.js';
@@ -123,6 +124,7 @@ const AppRouter: React.FC = () => {
       <Route path="/company/projects-vehicles" element={<AuthenticatedLayout><ProjectsVehiclesView /></AuthenticatedLayout>} />
       <Route path="/company/dgii-606" element={<AuthenticatedLayout><DGIIReportView /></AuthenticatedLayout>} />
       <Route path="/company/erp-integration" element={<AuthenticatedLayout><ERPIntegrationView /></AuthenticatedLayout>} />
+      <Route path="/company/ai-config" element={<AuthenticatedLayout><AIConfigurationView /></AuthenticatedLayout>} />
       <Route path="/company/api-keys" element={<AuthenticatedLayout><ApiKeysView /></AuthenticatedLayout>} />
       <Route path="/company/api-docs" element={<AuthenticatedLayout><ApiDocsView /></AuthenticatedLayout>} />
       <Route path="/company/audit-logs" element={<AuthenticatedLayout><AuditLogView /></AuthenticatedLayout>} />

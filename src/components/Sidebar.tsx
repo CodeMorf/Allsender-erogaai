@@ -132,6 +132,13 @@ export const Sidebar: React.FC = () => {
           badge: 'Sync'
         },
         {
+          id: 'ai-config',
+          label: 'Lectura automática',
+          icon: Cpu,
+          roles: ['ADMIN', 'ACCOUNTANT'],
+          badge: 'IA'
+        },
+        {
           id: 'api-keys',
           label: 'API Keys & Credenciales',
           icon: Key,
@@ -157,7 +164,7 @@ export const Sidebar: React.FC = () => {
 
   // Auto-expand Configuración if an item within it is active
   useEffect(() => {
-    const configIds = ['organization', 'team', 'users', 'erp-integration', 'api-keys', 'api-docs', 'audit-logs'];
+    const configIds = ['organization', 'team', 'users', 'erp-integration', 'ai-config', 'api-keys', 'api-docs', 'audit-logs'];
     if (configIds.includes(activeView)) {
       setIsConfigOpen(true);
     }

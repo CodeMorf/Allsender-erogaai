@@ -71,9 +71,13 @@ export function validateFiscalData(input: FiscalValidationInput): ValidationResu
   const reconciliation = reconcileReceiptMath(extraction);
   const mathValid = reconciliation.is_valid;
   if (!mathValid) {
-    errors.push(
-      `Inconsistencia matemática: total declarado RD$ ${reconciliation.expected_total.toFixed(2)} `
-      + `vs. total calculado RD$ ${reconciliation.calculated_total.toFixed(2)} `
+    // The printed ITBIS may be partial, included in the total, or read with
+    // low confidence. Keep the receipt in review without presenting the
+    // difference as a definitive fiscal error. Approval remains blocked by
+    // the reconciliation gate in the approval service.
+    warnings.push(
+      `Montos por revisar: el total indicado es RD$ ${reconciliation.expected_total.toFixed(2)} `
+      + `y la suma revisada es RD$ ${reconciliation.calculated_total.toFixed(2)} `
       + `(diferencia RD$ ${Math.abs(reconciliation.difference).toFixed(2)}).`
     );
   }

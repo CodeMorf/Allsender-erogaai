@@ -47,6 +47,20 @@ describe('fiscal validation hard gates', () => {
     expect(result.is_valid).toBe(false);
   });
 
+  it('keeps a possible partial or included ITBIS difference as a review warning', () => {
+    const result = validateFiscalData({
+      ...validBase,
+      subtotal: 1743.21,
+      itbis_amount: 208.18,
+      total_amount: 2020.99
+    });
+
+    expect(result.math_valid).toBe(false);
+    expect(result.is_valid).toBe(false);
+    expect(result.errors).toHaveLength(0);
+    expect(result.warnings.join(' ')).toContain('Montos por revisar');
+  });
+
   it('includes discounts, legal tip and other taxes in the fiscal calculation', () => {
     const result = validateFiscalData({
       ...validBase,

@@ -567,25 +567,37 @@ export class PrismaRepository {
     return org ? this.toOrganization(org) : null;
   }
 
-  async saveOrganization(data: Partial<Organization>): Promise<Organization> {
+  async saveOrganization(data: Partial<Organization>, actor?: { userId: string; userName: string }): Promise<Organization> {
     const orgId = data.id || id('org');
     const existing = data.id ? await this.prisma.organization.findUnique({ where: { id: data.id } }) : null;
+    const organizationData = {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(data.rnc !== undefined ? { rnc: data.rnc } : {}),
+      ...(data.currency !== undefined ? { currency: data.currency } : {}),
+      ...(data.plan !== undefined ? { plan: data.plan } : {}),
+      ...(data.logo_url !== undefined ? { logo_url: data.logo_url } : {}),
+      ...(data.address !== undefined ? { address: data.address } : {}),
+      ...(data.phone !== undefined ? { phone: data.phone } : {}),
+      ...(data.is_active !== undefined ? { is_active: data.is_active } : {}),
+      ...(data.onboarding_step !== undefined ? { onboarding_step: data.onboarding_step } : {}),
+      ...(data.onboarding_done_at !== undefined ? { onboarding_done_at: data.onboarding_done_at ? new Date(data.onboarding_done_at) : null } : {})
+    };
     const saved = existing
-      ? await this.prisma.organization.update({
-          where: { id: orgId },
-          data: {
-            ...(data.name !== undefined ? { name: data.name } : {}),
-            ...(data.rnc !== undefined ? { rnc: data.rnc } : {}),
-            ...(data.currency !== undefined ? { currency: data.currency } : {}),
-            ...(data.plan !== undefined ? { plan: data.plan } : {}),
-            ...(data.logo_url !== undefined ? { logo_url: data.logo_url } : {}),
-            ...(data.address !== undefined ? { address: data.address } : {}),
-            ...(data.phone !== undefined ? { phone: data.phone } : {}),
-            ...(data.is_active !== undefined ? { is_active: data.is_active } : {}),
-            ...(data.onboarding_step !== undefined ? { onboarding_step: data.onboarding_step } : {}),
-            ...(data.onboarding_done_at !== undefined ? { onboarding_done_at: data.onboarding_done_at ? new Date(data.onboarding_done_at) : null } : {})
-          }
-        })
+      ? actor
+        ? await this.prisma.$transaction(async tx => {
+            const updated = await tx.organization.update({ where: { id: orgId }, data: organizationData });
+            await this.auditTx(tx, {
+              organization_id: orgId,
+              user_id: actor.userId,
+              user_name: actor.userName,
+              action: 'PLATFORM_SETTINGS',
+              entity_type: 'ORGANIZATION',
+              entity_id: orgId,
+              details: 'Actualizó la configuración general de la organización.'
+            });
+            return updated;
+          })
+        : await this.prisma.organization.update({ where: { id: orgId }, data: organizationData })
       : await this.prisma.organization.create({
           data: {
             id: orgId,

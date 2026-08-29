@@ -569,6 +569,14 @@ export const ExpenseScannerModal: React.FC = () => {
   const currentFiscalFingerprint = fiscalFingerprint({ supplierName, supplierRnc, ncf, ncfType, subtotal, itbisAmount, legalTipAmount, otherTaxes, totalAmount, lineItems });
   const validationIsCurrent = validationSnapshot !== null && validationSnapshot === currentFiscalFingerprint;
   const supplierIsActive = processedSession?.supplier_resolution?.dgii_status === 'ACTIVO';
+  const storedFiscalErrors = processedSession?.fiscal_validation?.errors || [];
+  const fiscalReviewWarnings = [
+    ...(processedSession?.fiscal_validation?.warnings || []),
+    ...storedFiscalErrors
+      .filter(message => /inconsistencia matemática/i.test(message))
+      .map(message => message.replace(/^Inconsistencia matemática:/i, 'Montos por revisar:'))
+  ].filter((message, index, messages) => messages.indexOf(message) === index);
+  const fiscalBlockingErrors = storedFiscalErrors.filter(message => !/inconsistencia matemática/i.test(message));
   const canApproveDirect = processedSession?.status === 'PROCESSED'
     && validationIsCurrent
     && processedSession.fiscal_validation?.is_valid === true
@@ -900,8 +908,11 @@ export const ExpenseScannerModal: React.FC = () => {
                     {!validationIsCurrent && (
                       <p className="mt-2 flex items-start gap-1 text-amber-700 dark:text-amber-400"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Los datos fueron modificados después de la validación. Deben volver a validarse antes de aprobar.</p>
                     )}
-                    {(processedSession.fiscal_validation?.errors || []).length > 0 && (
-                      <p className="mt-2 text-rose-600 dark:text-rose-400">{processedSession.fiscal_validation?.errors.join(' ')}</p>
+                    {fiscalReviewWarnings.length > 0 && (
+                      <p className="mt-2 text-amber-700 dark:text-amber-400">{fiscalReviewWarnings.join(' ')}</p>
+                    )}
+                    {fiscalBlockingErrors.length > 0 && (
+                      <p className="mt-2 text-rose-600 dark:text-rose-400">{fiscalBlockingErrors.join(' ')}</p>
                     )}
                   </div>
                 )}

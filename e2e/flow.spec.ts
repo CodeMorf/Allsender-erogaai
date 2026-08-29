@@ -45,6 +45,18 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
     expect(regData.user).toBeDefined();
     expect(regData.organization).toBeDefined();
 
+    const organizationUpdate = await request.put('/api/organization', {
+      data: {
+        name: 'Organización E2E Actualizada',
+        rnc: '131-99882-1',
+        address: 'Santo Domingo, República Dominicana',
+        phone: '809-555-0100',
+        currency: 'DOP'
+      }
+    });
+    expect(organizationUpdate.status()).toBe(200);
+    expect((await organizationUpdate.json()).organization.name).toBe('Organización E2E Actualizada');
+
     // Tenant ADMIN cannot access platform superadmin endpoints (HTTP 403)
     const platformRes = await request.get('/api/platform/tenants');
     expect(platformRes.status()).toBe(403);
@@ -80,6 +92,9 @@ test.describe('ErogaAI SaaS Multi-Tenant & Platform Security Suite', () => {
       expect(persisted?.organization_id).toBe(regData.organization.id);
       expect(persisted?.ncf).toBe('B0100000001');
       expect(persisted?.total_amount).toBe(2500);
+      const persistedOrganization = await prisma.organization.findUnique({ where: { id: regData.organization.id } });
+      expect(persistedOrganization?.name).toBe('Organización E2E Actualizada');
+      expect(persistedOrganization?.phone).toBe('809-555-0100');
     } finally {
       await prisma.$disconnect();
     }

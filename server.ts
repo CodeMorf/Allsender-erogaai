@@ -231,6 +231,38 @@ async function startServer() {
     res.json({ success: true, organization: updated });
   }));
 
+  app.put('/api/organization', requirePermission('company.manage'), asyncRoute(async (req: AuthenticatedRequest, res) => {
+    const orgId = req.organization_id!;
+    const existing = await prismaRepo.getOrganizationById(orgId);
+    if (!existing) return res.status(404).json({ error: 'Organización no encontrada.' });
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+    const rnc = typeof body.rnc === 'string' ? body.rnc.trim() : undefined;
+    const address = typeof body.address === 'string' ? body.address.trim() : undefined;
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : undefined;
+    const logoUrl = typeof body.logo_url === 'string' ? body.logo_url.trim() : undefined;
+    const currency = body.currency === 'DOP' || body.currency === 'USD' || body.currency === 'EUR' ? body.currency : undefined;
+
+    if (name !== undefined && !name) return res.status(400).json({ error: 'El nombre de la organización es obligatorio.' });
+    if (rnc !== undefined && !rnc) return res.status(400).json({ error: 'El RNC de la organización es obligatorio.' });
+    if (Object.values({ name, rnc, address, phone, logoUrl, currency }).every(value => value === undefined)) {
+      return res.status(400).json({ error: 'No se recibió ninguna configuración para actualizar.' });
+    }
+
+    const updated = await prismaRepo.saveOrganization({
+      id: orgId,
+      ...(name !== undefined ? { name } : {}),
+      ...(rnc !== undefined ? { rnc } : {}),
+      ...(address !== undefined ? { address } : {}),
+      ...(phone !== undefined ? { phone } : {}),
+      ...(logoUrl !== undefined ? { logo_url: logoUrl } : {}),
+      ...(currency !== undefined ? { currency } : {})
+    }, { userId: req.user_id!, userName: req.user_name! });
+
+    res.json({ organization: updated });
+  }));
+
   // --------------------------------------------------
   // Users & Team Management (Gestión de Equipo)
   // --------------------------------------------------
