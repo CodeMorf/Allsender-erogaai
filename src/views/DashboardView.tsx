@@ -242,11 +242,11 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
 
-        {/* Card 4: Motor de IA */}
+        {/* Card 4: Lectura automática */}
         <div className="all-card all-card-hover rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Motor IA Principal
+              Lectura automática
             </span>
             <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center">
               <BrainCircuit className="w-4 h-4" />
@@ -254,11 +254,11 @@ export const DashboardView: React.FC = () => {
           </div>
           <div className="mt-3">
             <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
-              {activeProvider?.name || 'Google Gemini Pro'}
+              Procesamiento disponible
             </p>
             <div className="flex items-center gap-1.5 mt-1 text-[11px] text-purple-600 dark:text-purple-400 font-semibold">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>{activeProvider?.selected_model} (Online)</span>
+              <span>Listo para usar</span>
             </div>
           </div>
         </div>
