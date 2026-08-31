@@ -20,23 +20,28 @@ function numberOrZero(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Build the minimum extraction shape required by the mathematical reconciler.
+ * IMPORTANT: this helper MUST NOT manufacture fiscal facts. Fields that are not
+ * part of FiscalValidationInput remain empty/neutral and confidence is zero.
+ */
 export function toFiscalExtraction(input: FiscalValidationInput): ReceiptExtraction {
   return {
-    supplier_name: '',
+    supplier_name: String(input.supplier_name || ''),
     supplier_rnc: String(input.supplier_rnc || ''),
     ncf: String(input.ncf || ''),
-    ncf_type: (input.ncf_type || 'B01') as NcfType,
+    ncf_type: (input.ncf_type || '') as NcfType,
     date: '',
     subtotal: numberOrZero(input.subtotal),
     itbis_amount: numberOrZero(input.itbis_amount),
     legal_tip_amount: numberOrZero(input.legal_tip_amount),
     other_taxes: numberOrZero(input.other_taxes),
     total_amount: numberOrZero(input.total_amount),
-    currency: 'DOP',
-    document_type: 'RECIBO',
-    suggested_classification: 'GASTO_OPERATIVO',
+    currency: '' as ReceiptExtraction['currency'],
+    document_type: '' as ReceiptExtraction['document_type'],
+    suggested_classification: '' as ReceiptExtraction['suggested_classification'],
     suggested_category: '',
-    confidence_score: 100,
+    confidence_score: 0,
     line_items: input.line_items || []
   };
 }
@@ -59,7 +64,9 @@ export function validateFiscalData(input: FiscalValidationInput): ValidationResu
       : 'El RNC o cédula del proveedor es requerido para aprobar.');
   }
 
-  const ncfValidation = validateDominicanNcf(extraction.ncf);
+  const ncfValidation = extraction.ncf
+    ? validateDominicanNcf(extraction.ncf)
+    : { isValid: false, message: 'El NCF es requerido para aprobar.', ncfType: undefined } as ReturnType<typeof validateDominicanNcf>;
   let ncfValid = ncfValidation.isValid;
   if (!ncfValid) {
     errors.push(ncfValidation.message);
