@@ -47,13 +47,13 @@ export interface AIProvider {
 // cannot disagree about what constitutes a valid fiscal extraction.
 export { validateFiscalData };
 
-const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. Responde únicamente JSON válido.`;
+const MULTI_SEGMENT_PROMPT = `Las imágenes adjuntas son segmentos consecutivos del MISMO comprobante fiscal dominicano. Analiza todos los segmentos como un solo documento, respetando HEADER, BODY y FOOTER. Extrae exclusivamente información visible y devuelve JSON compatible con ReceiptExtraction. Incluye supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y todos los line_items. Cada line_item debe incluir description, sku si aparece, quantity, unit_price, discount si aparece, taxable_amount si aparece, itbis_rate, itbis_amount si aparece, total, segment_index, confidence y raw_text. Las fotos pueden solaparse: no dupliques líneas del borde entre segmentos consecutivos. No inventes productos, cantidades ni montos. Si un dato no es visible, déjalo vacío o en cero. No completes clasificación contable ni deducibilidad fiscal como hechos: déjalas vacías para revisión humana. Responde únicamente JSON válido.`;
 const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-20b';
 const GROQ_PRICING: Record<string, { input: number; output: number }> = {
   'openai/gpt-oss-20b': { input: 0.075, output: 0.30 },
   'openai/gpt-oss-120b': { input: 0.15, output: 0.60 }
 };
-const GROQ_LOCAL_TEXT_PROMPT = `Recibirás únicamente texto producido por OCR local de un comprobante fiscal dominicano. No recibirás imágenes. Ordena y corrige errores obvios de OCR solo cuando el propio texto permita confirmarlos. Devuelve exclusivamente JSON compatible con ReceiptExtraction, con supplier_name, supplier_rnc, ncf, ncf_type, date (YYYY-MM-DD), subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y line_items. No inventes datos: si un dato no aparece claramente, conserva el valor local, déjalo vacío o en cero. Respeta conceptos con valor cero y no confundas TOTAL NETO/SUBTOTAL con TOTAL. Usa el cuadre matemático solo para validar, no para crear importes no visibles.`;
+const GROQ_LOCAL_TEXT_PROMPT = `Recibirás únicamente texto producido por OCR local de un comprobante fiscal dominicano. No recibirás imágenes. Ordena y corrige errores obvios de OCR solo cuando el propio texto permita confirmarlos. Devuelve exclusivamente JSON compatible con ReceiptExtraction, con supplier_name, supplier_rnc, ncf, ncf_type, date (YYYY-MM-DD), subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, suggested_classification, suggested_category, confidence_score, raw_text, observations y line_items. No inventes datos: si un dato no aparece claramente, conserva el valor local, déjalo vacío o en cero. Respeta conceptos con valor cero y no confundas TOTAL NETO/SUBTOTAL con TOTAL. Usa el cuadre matemático solo para validar, no para crear importes no visibles. No inventes clasificación contable, categoría ni deducibilidad fiscal.`;
 
 function normalizeGroqModel(model?: string): string {
   const normalized = (model || '').trim();
@@ -67,6 +67,16 @@ function imageAsDataUrl(image: ReceiptImage): string {
   return image.base64Data.startsWith('data:') || /^https?:\/\//i.test(image.base64Data)
     ? image.base64Data
     : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
+}
+
+function unverifiedClassification(reason = 'No existe evidencia suficiente para clasificar automáticamente este gasto.'): ClassificationSuggestion {
+  return {
+    classification: '' as ExpenseClassification,
+    category: '',
+    confidence: 0,
+    reasoning: reason,
+    tax_deductibility: 'NO_DETERMINADO'
+  } as ClassificationSuggestion;
 }
 
 async function extractOpenAICompatibleSession(input: {
@@ -135,10 +145,6 @@ async function prepareLocalOCRImage(image: ReceiptImage): Promise<Buffer> {
   return sharp(source, { failOn: 'none' })
     .rotate()
     .trim()
-    // Keep the local OCR bounded on mobile photos. Upscaling a long receipt to
-    // 2200px wide made Tesseract scan 4-6 oversized variants and could take a
-    // minute. This cap preserves readable text while keeping the fast path
-    // predictable.
     .resize({ width: 1400, height: 2400, fit: 'inside', withoutEnlargement: false })
     .grayscale()
     .normalize()
@@ -161,8 +167,6 @@ async function prepareLocalOCRReceiptCrops(image: ReceiptImage): Promise<Buffer[
   const bodyHeight = Math.max(1, Math.min(height - bodyTop, Math.round(height * 0.45)));
   return Promise.all([
     sharp(rotatedSource).extract({ left, top: 0, width: cropWidth, height: headerHeight }).resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: false }).grayscale().normalize().sharpen({ sigma: 1 }).png().toBuffer(),
-    // Preserve the original receipt pixels for the body. On thermal paper,
-    // aggressive contrast/sharpening can turn aligned amount columns into noise.
     sharp(rotatedSource).extract({ left, top: bodyTop, width: cropWidth, height: bodyHeight }).resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: false }).png().toBuffer()
   ]);
 }
@@ -200,7 +204,6 @@ const findLabeledAmount = (lines: string[], pattern: RegExp): number => {
     return parseMoneyValue(values.at(-1));
   }
 
-  // Some POS printers put the label and amount on consecutive lines.
   const labelIndex = lines.findIndex(candidate => pattern.test(candidate));
   const followingLine = labelIndex >= 0 ? lines[labelIndex + 1] : '';
   if (followingLine && /^\s*-?\d[\d.,]*[.,]\d{2}\s*$/.test(followingLine)) {
@@ -348,17 +351,16 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
   const legalTipAmount = findLabeledAmount(lines, /\b(?:PROPINA|LEY\s*54-32)\b/i);
   const totalAmount = findLabeledAmount(lines, /\b(?:TOTAL\s+(?:A\s+PAGAR|GENERAL)|MONTO\s+TOTAL)\b/i)
     || findLabeledAmount(lines.filter(line => !/\b(?:SUB\s*TOTAL|TOTAL\s+NETO|TOTAL\s+DE\s+ART[IÍ]CULOS?)\b/i.test(line)), /\bTOTAL\b(?!\s+(?:NETO|DE\s+ART[IÍ]CULOS?))/i);
-  const resolvedSubtotal = subtotal || Math.max(0, totalAmount - itbisAmount - legalTipAmount);
 
   const normalizedNcf = (ncfMatch?.[1] || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
   const detectedNcfType = normalizedNcf.slice(0, 3);
   const supportedNcfTypes: NcfType[] = ['B01', 'B02', 'B11', 'B14', 'B15', 'B16', 'E31', 'E32', 'E44', 'E45'];
   const ncfType = supportedNcfTypes.includes(detectedNcfType as NcfType)
     ? detectedNcfType as NcfType
-    : 'B01';
+    : '' as NcfType;
   const lineItems = reconcileSingleLocalItem(
     parseReceiptLineItems(rawText, segmentIndex),
-    resolvedSubtotal,
+    subtotal,
     itbisAmount,
     legalTipAmount,
     0,
@@ -372,7 +374,12 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
     + (lineItems.length > 0 ? 25 : 0)
     + (/\bFECHA\b/i.test(normalizedText) ? 5 : 0)
   );
-  const safeConfidence = Math.max(10, Math.min(92, Math.round((confidence || 35) * 0.45 + structuralScore * 0.55)));
+  const safeConfidence = Math.max(0, Math.min(92, Math.round((confidence || 0) * 0.45 + structuralScore * 0.55)));
+  const inferredDocumentType = ncfType
+    ? (ncfType === 'B02' || ncfType === 'E32'
+      ? 'FACTURA_CONSUMO'
+      : ncfType.startsWith('E') ? 'COMPROBANTE_ELECTRONICO' : 'FACTURA_CREDITO_FISCAL')
+    : '';
 
   return {
     supplier_name: supplierName,
@@ -380,23 +387,22 @@ export function parseLocalOCRText(rawText: string, confidence: number = 0, segme
     ncf: normalizedNcf,
     ncf_type: ncfType,
     date: normalizeReceiptDate(dateLine),
-    subtotal: resolvedSubtotal,
+    subtotal,
     itbis_amount: itbisAmount,
     legal_tip_amount: legalTipAmount,
     other_taxes: 0,
-    total_amount: totalAmount || resolvedSubtotal + itbisAmount + legalTipAmount,
-    currency: 'DOP',
-    document_type: ncfType === 'B02' || ncfType === 'E32'
-      ? 'FACTURA_CONSUMO'
-      : ncfType.startsWith('E') ? 'COMPROBANTE_ELECTRONICO' : 'FACTURA_CREDITO_FISCAL',
-    suggested_classification: 'GASTO_OPERATIVO',
-    suggested_category: 'Gastos Generales',
+    total_amount: totalAmount,
+    currency: '' as ReceiptExtraction['currency'],
+    document_type: inferredDocumentType as ReceiptExtraction['document_type'],
+    suggested_classification: '' as ExpenseClassification,
+    suggested_category: '',
     confidence_score: safeConfidence,
     line_items: lineItems,
     raw_text: rawText,
     observations: [
       'Comprobante leído localmente; revise los campos antes de aprobar.',
-      'Revise RNC, NCF y montos antes de aprobar el comprobante.'
+      'Los campos no visibles permanecen vacíos; el sistema no completa valores fiscales por defecto.',
+      'La clasificación contable y la deducibilidad requieren confirmación.'
     ]
   };
 }
@@ -433,9 +439,6 @@ export async function extractWithLocalOCR(image: ReceiptImage, segmentIndex = 0)
     try {
       const cropInputs = await prepareLocalOCRReceiptCrops(image);
       if (cropInputs.length > 0) {
-        // Long thermal receipts often lose their middle columns when OCR runs
-        // over the entire photo. Read the header and body separately, then
-        // merge only fields that the full-document OCR did not find.
         const needsHeader = !primary.supplier_name || !primary.supplier_rnc || !primary.ncf || !primary.date;
         const needsBody = primary.total_amount <= 0 || primary.line_items.length === 0;
         const cropIndexes = [
@@ -450,7 +453,6 @@ export async function extractWithLocalOCR(image: ReceiptImage, segmentIndex = 0)
           candidates.push(mergedCropExtraction);
         }
       } else {
-        // For non-thermal layouts, one alternate segmentation pass is enough.
         candidates.push(await recognizeWithMode(originalInput, PSM.SINGLE_BLOCK));
       }
     } catch (error: any) {
@@ -532,25 +534,7 @@ export class GeminiAIProvider implements AIProvider {
 
     try {
       const ai = new GoogleGenAI({ apiKey: this.apiKey });
-      const prompt = `Analiza la siguiente imagen de un comprobante o factura fiscal de la República Dominicana (DGII). Extrae con precisión matemática en formato JSON:
-      - supplier_name: Razón Social del proveedor.
-      - supplier_rnc: RNC o Cédula (solo dígitos).
-      - ncf: Número de Comprobante Fiscal (ej. B0100000001, E3100000001).
-      - ncf_type: Tipo de NCF (B01, B02, B11, B14, B15, E31, E32).
-      - date: Fecha de emisión (YYYY-MM-DD).
-      - subtotal: Monto neto sin impuestos.
-      - itbis_amount: Impuesto ITBIS (18% o 16%).
-      - legal_tip_amount: Propina legal (10% si aplica).
-      - other_taxes: Otros impuestos.
-      - total_amount: Monto total facturado en RD$ o divisa indicada.
-      - currency: DOP, USD o EUR.
-      - document_type: FACTURA_CREDITO_FISCAL, FACTURA_CONSUMO, TICKET_POS, COMPROBANTE_ELECTRONICO o RECIBO.
-      - suggested_classification: GASTO_OPERATIVO, COSTO_VENTA, COMPRA_INVENTARIO o ACTIVO_FIJO.
-      - suggested_category: Categoría contable sugerida.
-      - confidence_score: Nivel de certeza de 0 a 100.
-      - line_items: Arreglo de ítems o productos leídos (description, quantity, unit_price, itbis_rate, total).
-      - raw_text: Texto leído relevante.
-      - observations: Observaciones o inconsistencias detectadas.`;
+      const prompt = `Analiza la siguiente imagen de un comprobante o factura fiscal de la República Dominicana (DGII). Extrae únicamente datos visibles y verificables en formato JSON. No inventes, no completes valores por defecto y no deduzcas clasificación contable ni deducibilidad fiscal. Si un dato no está visible, usa cadena vacía o cero según el tipo. Extrae supplier_name, supplier_rnc, ncf, ncf_type, date, subtotal, itbis_amount, legal_tip_amount, other_taxes, total_amount, currency, document_type, confidence_score, line_items, raw_text y observations.`;
 
       const cleanBase64 = image.base64Data.replace(/^data:image\/\w+;base64,/, '');
 
@@ -591,9 +575,12 @@ export class GeminiAIProvider implements AIProvider {
 
       return {
         ...parsed,
-        ncf_type: (parsed.ncf_type as NcfType) || 'B01',
-        suggested_classification: (parsed.suggested_classification as ExpenseClassification) || 'GASTO_OPERATIVO',
-        currency: (parsed.currency as 'DOP' | 'USD' | 'EUR') || 'DOP'
+        ncf_type: (parsed.ncf_type as NcfType) || ('' as NcfType),
+        suggested_classification: '' as ExpenseClassification,
+        suggested_category: '',
+        currency: (parsed.currency as ReceiptExtraction['currency']) || ('' as ReceiptExtraction['currency']),
+        confidence_score: Number.isFinite(Number(parsed.confidence_score)) ? Number(parsed.confidence_score) : 0,
+        observations: [...new Set([...(parsed.observations || []), 'La clasificación contable no se completa automáticamente; requiere revisión.'])]
       };
     } catch (error: any) {
       await prismaRepo.logAIUsage({
@@ -627,6 +614,8 @@ export class GeminiAIProvider implements AIProvider {
         config: { responseMimeType: 'application/json' }
       });
       const extraction = JSON.parse(response.text) as ReceiptExtraction;
+      extraction.suggested_classification = '' as ExpenseClassification;
+      extraction.suggested_category = '';
       await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'GEMINI',
@@ -644,14 +633,8 @@ export class GeminiAIProvider implements AIProvider {
     }
   }
 
-  async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
-    return {
-      classification: 'GASTO_OPERATIVO',
-      category: 'Gastos Operativos Generales',
-      confidence: 90,
-      reasoning: 'Clasificación generada por regla contable de negocio.',
-      tax_deductibility: 'Admisible en Formato DGII 606'
-    };
+  async classifyExpense(_data: ReceiptData): Promise<ClassificationSuggestion> {
+    return unverifiedClassification();
   }
 
   async validateExtraction(data: ReceiptData): Promise<ValidationResult> {
@@ -756,16 +739,20 @@ export class GroqAIProvider implements AIProvider {
         supplier_name: parsed.supplier_name || base.supplier_name,
         supplier_rnc: parsed.supplier_rnc || base.supplier_rnc,
         ncf: parsed.ncf || base.ncf,
+        ncf_type: (parsed.ncf_type || base.ncf_type || '') as NcfType,
         date: parsed.date || base.date,
         subtotal: Number(parsed.subtotal || base.subtotal || 0),
         itbis_amount: Number(parsed.itbis_amount || base.itbis_amount || 0),
         legal_tip_amount: Number(parsed.legal_tip_amount || base.legal_tip_amount || 0),
         other_taxes: Number(parsed.other_taxes || base.other_taxes || 0),
         total_amount: Number(parsed.total_amount || base.total_amount || 0),
+        currency: (parsed.currency || base.currency || '') as ReceiptExtraction['currency'],
+        suggested_classification: '' as ExpenseClassification,
+        suggested_category: '',
         confidence_score: Number(parsed.confidence_score || base.confidence_score || 0),
         line_items: Array.isArray(parsed.line_items) && parsed.line_items.length > 0 ? parsed.line_items : base.line_items,
         raw_text: rawText,
-        observations: [...new Set([...(base.observations || []), ...(parsed.observations || []), 'Se revisó automáticamente la información leída; revise los campos antes de aprobar.'])]
+        observations: [...new Set([...(base.observations || []), ...(parsed.observations || []), 'Se revisó automáticamente la información leída; revise los campos antes de aprobar.', 'La clasificación contable no se completa automáticamente.'])]
       };
 
       await prismaRepo.logAIUsage({ organization_id: this.orgId, provider_type: 'GROQ', model: this.model, action: 'EXTRACT_RECEIPT', tokens_prompt: json.usage?.prompt_tokens || 0, tokens_completion: json.usage?.completion_tokens || 0, duration_ms: Date.now() - startTime, status: 'SUCCESS' });
@@ -776,14 +763,8 @@ export class GroqAIProvider implements AIProvider {
     }
   }
 
-  async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
-    return {
-      classification: 'GASTO_OPERATIVO',
-      category: 'Gastos Operativos',
-      confidence: 88,
-      reasoning: 'Clasificación Groq',
-      tax_deductibility: 'Admisible 606'
-    };
+  async classifyExpense(_data: ReceiptData): Promise<ClassificationSuggestion> {
+    return unverifiedClassification();
   }
 
   async validateExtraction(data: ReceiptData): Promise<ValidationResult> {
@@ -843,7 +824,7 @@ export class OpenAIProvider implements AIProvider {
     if (!this.apiKey) throw new Error('API Key de OpenAI no configurada.');
 
     try {
-      const prompt = `Analiza la imagen del comprobante fiscal dominicano (NCF, RNC, Subtotal, ITBIS 18%, Total) y responde en JSON estructurado.`;
+      const prompt = `Analiza la imagen del comprobante fiscal dominicano y responde en JSON estructurado. Extrae únicamente datos visibles: NCF, RNC, fecha, subtotal, ITBIS, otros impuestos, total, moneda, tipo de documento y líneas. No inventes ni completes valores por defecto. No clasifiques contablemente el gasto ni afirmes deducibilidad fiscal.`;
       const cleanBase64 = image.base64Data.startsWith('data:') ? image.base64Data : `data:${image.mimeType || 'image/jpeg'};base64,${image.base64Data}`;
 
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -872,6 +853,8 @@ export class OpenAIProvider implements AIProvider {
       const json = await res.json();
       const text = json.choices?.[0]?.message?.content || '{}';
       const parsed = JSON.parse(text) as ReceiptExtraction;
+      parsed.suggested_classification = '' as ExpenseClassification;
+      parsed.suggested_category = '';
 
       await prismaRepo.logAIUsage({
         organization_id: this.orgId,
@@ -905,6 +888,8 @@ export class OpenAIProvider implements AIProvider {
     if (!this.apiKey) throw new Error('API Key de OpenAI no configurada.');
     try {
       const result = await extractOpenAICompatibleSession({ endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: this.apiKey, model: this.model, images });
+      result.extraction.suggested_classification = '' as ExpenseClassification;
+      result.extraction.suggested_category = '';
       await prismaRepo.logAIUsage({
         organization_id: this.orgId,
         provider_type: 'OPENAI',
@@ -922,14 +907,8 @@ export class OpenAIProvider implements AIProvider {
     }
   }
 
-  async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
-    return {
-      classification: 'GASTO_OPERATIVO',
-      category: 'Gastos Operativos',
-      confidence: 92,
-      reasoning: 'Clasificación OpenAI',
-      tax_deductibility: 'Admisible 606'
-    };
+  async classifyExpense(_data: ReceiptData): Promise<ClassificationSuggestion> {
+    return unverifiedClassification();
   }
 
   async validateExtraction(data: ReceiptData): Promise<ValidationResult> {
@@ -1021,6 +1000,8 @@ export class CodeMorfAIProvider implements AIProvider {
         if (res.ok) {
           const data = await res.json();
           const ext: ReceiptExtraction = data.extraction || data;
+          ext.suggested_classification = '' as ExpenseClassification;
+          ext.suggested_category = '';
           await prismaRepo.logAIUsage({
             organization_id: this.orgId,
             provider_type: 'CODEMORF',
@@ -1042,14 +1023,8 @@ export class CodeMorfAIProvider implements AIProvider {
     return await geminiEngine.extractReceiptData(image);
   }
 
-  async classifyExpense(data: ReceiptData): Promise<ClassificationSuggestion> {
-    return {
-      classification: 'GASTO_OPERATIVO',
-      category: 'Gastos Operativos Generales',
-      confidence: 95,
-      reasoning: 'Clasificación realizada por CodeMorf Cloud AI.',
-      tax_deductibility: 'Admisible en Formato DGII 606'
-    };
+  async classifyExpense(_data: ReceiptData): Promise<ClassificationSuggestion> {
+    return unverifiedClassification();
   }
 
   async validateExtraction(data: ReceiptData): Promise<ValidationResult> {
@@ -1079,7 +1054,6 @@ export async function getAIProviderInstance(orgId: string, preferredType?: AIPro
     || activeConfigs[0];
 
   if (!selected) {
-    // Return default CodeMorf / Gemini instance using env key
     return new CodeMorfAIProvider('', 'codemorf-vision-v1', orgId);
   }
 
@@ -1121,6 +1095,8 @@ export async function extractReceiptSessionWithAI(
           ? await provider.extractReceiptSessionData(images)
           : null;
       if (!extraction) continue;
+      extraction.suggested_classification = '' as ExpenseClassification;
+      extraction.suggested_category = '';
       return { extraction, providerUsed: config.provider_type, modelUsed: config.provider_type === 'GROQ' ? normalizeGroqModel(config.selected_model) : config.selected_model };
     } catch (error: any) {
       console.warn(`[AI Session Chain] Engine ${config.provider_type} failed: ${error.message}. Trying next provider...`);
@@ -1163,8 +1139,6 @@ export async function extractWithFallback(
   let localExtraction: ReceiptExtraction | null = null;
   let localFailure: Error | null = null;
 
-  // Images are read locally first. Paid providers are used only when local OCR
-  // does not produce a sufficiently reliable structured result.
   if (!/pdf/i.test(image.mimeType)) {
     try {
       localExtraction = await extractWithLocalOCR(image, segmentIndex);
@@ -1213,6 +1187,8 @@ export async function extractWithFallback(
       const extraction = cfg.provider_type === 'GROQ' && instance.extractReceiptTextData
         ? await instance.extractReceiptTextData(localExtraction?.raw_text || '', localExtraction || undefined)
         : await instance.extractReceiptData(image);
+      extraction.suggested_classification = '' as ExpenseClassification;
+      extraction.suggested_category = '';
       extraction.line_items = (extraction.line_items || []).map(item => ({ ...item, segment_index: segmentIndex }));
       return { extraction, providerUsed: cfg.provider_type, modelUsed: cfg.provider_type === 'GROQ' ? normalizeGroqModel(cfg.selected_model) : cfg.selected_model };
     } catch (error: any) {
